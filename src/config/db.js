@@ -58,6 +58,31 @@ const config = {
   },
 };
 
+const baseConnectionConfig = {
+  server: config.server,
+  port: config.port,
+  database: config.database,
+  options: config.options,
+  pool: config.pool,
+};
+
+const explicitAuthenticationConfig = {
+  ...baseConnectionConfig,
+  authentication: {
+    type: "default",
+    options: {
+      userName: config.user,
+      password: config.password,
+    },
+  },
+};
+
+const legacyAuthenticationConfig = {
+  ...baseConnectionConfig,
+  user: config.user,
+  password: config.password,
+};
+
 console.log("Effective DB config:", {
   user: config.user,
   server: config.server,
@@ -68,16 +93,27 @@ console.log("Effective DB config:", {
   passwordLength: config.password.length,
 });
 
+const connectPool = async (connectionConfig, label) => {
+  const pool = new sql.ConnectionPool(connectionConfig);
+  await pool.connect();
+  console.log(`Connected to SQL Server with ${label}`);
+  return pool;
+};
+
 // Initialize one shared SQL Server pool for the whole backend.
-const poolPromise = new sql.ConnectionPool(config)
-  .connect()
-  .then((pool) => {
-    console.log("Connected to SQL Server");
-    return pool;
-  })
-  .catch((err) => {
-    console.error("DB connection error:", err);
-    throw err;
+const poolPromise = connectPool(explicitAuthenticationConfig, "explicit authentication")
+  .catch(async (explicitAuthError) => {
+    console.warn(
+      "Explicit SQL authentication connection failed, retrying with legacy mssql config:",
+      explicitAuthError.message
+    );
+
+    try {
+      return await connectPool(legacyAuthenticationConfig, "legacy authentication");
+    } catch (legacyAuthError) {
+      console.error("DB connection error:", legacyAuthError);
+      throw legacyAuthError;
+    }
   });
 
 module.exports = { sql, poolPromise };
