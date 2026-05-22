@@ -14,7 +14,10 @@ const shippingRoutes = require("./routes/shipping.routes");
 const orderRoutes = require("./routes/order.routes");
 
 const app = express();
-const DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"];
+const DEFAULT_ALLOWED_ORIGINS = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+];
 
 const parseCsvEnv = (value = "") =>
   String(value || "")
@@ -31,8 +34,11 @@ const configuredOrigins = [
     ...(frontendUrl ? [frontendUrl] : []),
   ]),
 ];
-const allowedOrigins = configuredOrigins.length ? configuredOrigins : DEFAULT_ALLOWED_ORIGINS;
-const jsonBodyLimit = String(process.env.JSON_BODY_LIMIT || "10mb").trim() || "10mb";
+const allowedOrigins = configuredOrigins.length
+  ? configuredOrigins
+  : DEFAULT_ALLOWED_ORIGINS;
+const jsonBodyLimit =
+  String(process.env.JSON_BODY_LIMIT || "10mb").trim() || "10mb";
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
@@ -47,7 +53,7 @@ app.use(
 
       return callback(new Error("Origin is not allowed by CORS."));
     },
-  })
+  }),
 );
 app.use(express.json({ limit: jsonBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: jsonBodyLimit }));
@@ -55,7 +61,7 @@ app.use("/uploads", express.static(path.resolve(__dirname, "../uploads")));
 
 // Route kiểm tra nhanh backend đã khởi động thành công hay chưa.
 app.get("/", (req, res) => {
-  res.send("Backend running...");
+  res.send("Backend running v2...");
 });
 
 app.get("/health", (req, res) => {
