@@ -58,15 +58,22 @@ const config = {
   },
 };
 
-// Khởi tạo kết nối dùng chung tới SQL Server cho toàn bộ backend.
+console.log("Effective DB config:", {
+  user: config.user,
+  server: config.server,
+  database: config.database,
+  port: config.port,
+  encrypt: config.options.encrypt,
+  trustServerCertificate: config.options.trustServerCertificate,
+});
+
+// Initialize one shared SQL Server pool for the whole backend.
 const poolPromise = new sql.ConnectionPool(config)
   .connect()
-  // Trả về pool để các module khác tái sử dụng khi truy vấn DB.
   .then((pool) => {
     console.log("Connected to SQL Server");
     return pool;
   })
-  // Ghi log lỗi kết nối và ném lỗi ra ngoài để quá trình khởi động biết sự cố.
   .catch((err) => {
     console.error("DB connection error:", err);
     throw err;
