@@ -65,6 +65,7 @@ console.log("Effective DB config:", {
   port: config.port,
   encrypt: config.options.encrypt,
   trustServerCertificate: config.options.trustServerCertificate,
+  passwordLength: config.password.length,
 });
 
 // Initialize one shared SQL Server pool for the whole backend.
