@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>Tài liệu vị trí hàm Backend</title>
+  <style>
+    body {
+      font-family: "Times New Roman", serif;
+      font-size: 13pt;
+      line-height: 1.45;
+      margin: 28px 36px;
+      color: #111;
+    }
+    h1, h2, h3 {
+      margin-bottom: 8px;
+    }
+    h1 {
+      font-size: 20pt;
+    }
+    h2 {
+      font-size: 16pt;
+      margin-top: 24px;
+      border-bottom: 1px solid #aaa;
+      padding-bottom: 4px;
+    }
+    h3 {
+      font-size: 14pt;
+      margin-top: 18px;
+    }
+    p {
+      margin: 6px 0;
+    }
+    ul {
+      margin: 6px 0 10px 20px;
+    }
+    li {
+      margin: 4px 0;
+    }
+    code {
+      font-family: "Consolas", monospace;
+      font-size: 11pt;
+      background: #f4f4f4;
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    .note {
+      padding: 10px 12px;
+      background: #f7f7f7;
+      border-left: 4px solid #666;
+      margin: 12px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Tài liệu vị trí đặt hàm Backend và giải thích nghiệp vụ</h1>
+
+  <p><b>Phạm vi:</b> tài liệu này mô tả các hàm đang nằm trong <code>backend/src</code> của đồ án, bao gồm vị trí file, vai trò nghiệp vụ, và ý nghĩa xử lý chính của từng hàm.</p>
+  <p><b>Ghi chú:</b> các file route chủ yếu làm nhiệm vụ nối endpoint tới controller nên gần như không chứa hàm nghiệp vụ độc lập. Hiện tại các file facade như <code>controllers/order.controller.js</code>, <code>controllers/product.controller.js</code>, <code>controllers/auth.controller.js</code>, <code>controllers/chat.controller.js</code>, <code>services/ghn.service.js</code>, <code>services/sepay.service.js</code> và <code>services/mongoSepaySync.service.js</code> chủ yếu dùng để gom export sau khi mã nguồn đã được tách nhỏ theo domain.</p>
+
+  <div class="note">
+    <b>Quy ước đọc tài liệu</b><br />
+    Mỗi dòng hàm được ghi theo mẫu: <b>Tên hàm</b> — <b>Vị trí</b> — <b>Nghiệp vụ</b>.
+  </div>
+
+  <h2>1. Bootstrap và cấu hình nền</h2>
+
+  <h3><code>src/server.js</code></h3>
+  <p>Vai trò: file khởi động Express app, gắn middleware chung, public static uploads và mount toàn bộ route.</p>
+  <ul>
+    <li><b>Không có hàm named function riêng</b> — Vị trí: <code>src/server.js</code> — Nghiệp vụ nằm ở mức bootstrap ứng dụng: cấu hình CORS, body parser, static folder và đăng ký route.</li>
+  </ul>
+
+  <h3><code>src/config/db.js</code></h3>
+  <p>Vai trò: cấu hình SQL Server và tạo connection pool dùng chung cho toàn backend.</p>
+  <ul>
+    <li><b>poolPromise</b> — Vị trí: <code>src/config/db.js:15</code> — Tạo và tái sử dụng pool kết nối MSSQL cho toàn bộ controller/service, giúp các module chỉ cần await pool là có thể query.</li>
+  </ul>
+
+  <h2>2. Middleware xác thực và phân quyền</h2>
+
+  <h3><code>src/middlewares/auth.middleware.js</code></h3>
+  <ul>
+    <li><b>getJwtSecret</b> — Vị trí: <code>src/middlewares/auth.middleware.js:5</code> — Lấy secret JWT từ biến môi trường để xác minh access token.</li>
+    <li><b>buildBlockedAccountMessage</b> — Vị trí: <code>src/middlewares/auth.middleware.js:8</code> — Chuẩn hóa thông điệp khi tài khoản bị khóa/chặn để frontend nhận được thông báo rõ ràng.</li>
+    <li><b>authenticateAccessToken</b> — Vị trí: <code>src/middlewares/auth.middleware.js:19</code> — Xác thực JWT, nạp thông tin user hiện tại, đồng thời chặn tài khoản bị block trước khi đi vào controller.</li>
+    <li><b>authorizeRoles</b> — Vị trí: <code>src/middlewares/auth.middleware.js:108</code> — Kiểm tra role hiện tại có nằm trong danh sách được phép hay không để bảo vệ route admin.</li>
+  </ul>
+
+  <h2>3. Service tích hợp ngoài và hạ tầng</h2>
+
+  <h3><code>src/services/ghn.service.js</code> và thư mục <code>src/services/ghn/</code></h3>
+  <ul>
+    <li><b>Vai trò facade</b> — <code>src/services/ghn.service.js:1</code> — File này chỉ gom export public API của GHN để các controller cũ không cần đổi import.</li>
+    <li><b>getSenderDefaults</b>, <b>getParcelDefaults</b>, <b>getPublicConfig</b> — <code>src/services/ghn/config.js:12</code>, <code>:20</code>, <code>:28</code> — Đọc cấu hình người gửi, kích thước kiện mặc định và trạng thái sẵn sàng của tích hợp GHN.</li>
+    <li><b>ghnRequest</b> — <code>src/services/ghn/client.js:9</code> — Hàm gọi HTTP trung tâm tới GHN, gom luôn xử lý response và lỗi API.</li>
+    <li><b>normalizeOrderItems</b>, <b>mergeCreateOrderPayload</b>, <b>buildCalculateFeePayload</b> — <code>src/services/ghn/payload.js:12</code>, <code>:47</code>, <code>:109</code> — Chuẩn hóa payload tạo đơn/tính phí trước khi gửi sang GHN.</li>
+    <li><b>getProvinces</b>, <b>getDistricts</b>, <b>getWards</b> — <code>src/services/ghn/masterData.service.js:3</code>, <code>:8</code>, <code>:16</code> — Lấy dữ liệu tỉnh, quận, phường từ GHN.</li>
+    <li><b>calculateFee</b>, <b>createOrder</b>, <b>getOrderDetail</b>, <b>cancelOrder</b> — <code>src/services/ghn/order.service.js:9</code>, <code>:16</code>, <code>:27</code>, <code>:40</code> — Các nghiệp vụ chính để tính phí, tạo, xem và hủy vận đơn GHN.</li>
+  </ul>
+
+  <h3><code>src/services/sepay.service.js</code> và thư mục <code>src/services/sepay/</code></h3>
+  <ul>
+    <li><b>Vai trò facade</b> — <code>src/services/sepay.service.js:1</code> — File export công khai cho SePay, giữ nguyên API cũ cho các luồng đặt hàng.</li>
+    <li><b>getSepayVaConfig</b>, <b>getSepaySharedVaConfig</b> — <code>src/services/sepay/config.js:5</code>, <code>:51</code> — Đọc cấu hình virtual account theo đơn và shared VA từ biến môi trường.</li>
+    <li><b>postSepayOrderVa</b> — <code>src/services/sepay/client.js:22</code> — Hàm gọi HTTP tới SePay để tạo order VA.</li>
+    <li><b>createSepayOrderVa</b> — <code>src/services/sepay/orderVa.service.js:6</code> — Nghiệp vụ tạo virtual account theo đơn hàng, validate cấu hình và chuẩn hóa response.</li>
+  </ul>
+
+  <h3><code>src/services/mongoSepaySync.service.js</code> và thư mục <code>src/services/mongoSepaySync/</code></h3>
+  <ul>
+    <li><b>Vai trò facade</b> — <code>src/services/mongoSepaySync.service.js:1</code> — File export công khai cho luồng đồng bộ webhook SePay sang MongoDB.</li>
+    <li><b>getMongoSepayConfig</b> — <code>src/services/mongoSepaySync/config.js:19</code> — Đọc cấu hình bật/tắt sync, URI, tên database và collection Mongo.</li>
+    <li><b>getMongoDatabase</b> — <code>src/services/mongoSepaySync/client.js:44</code> — Lazy-load package <code>mongodb</code>, quản lý kết nối và trả về database đang dùng.</li>
+    <li><b>buildTransactionDocument</b>, <b>buildOrderDocument</b>, <b>buildMongoUpsertPayload</b> — <code>src/services/mongoSepaySync/mappers.js:22</code>, <code>:57</code>, <code>:88</code> — Map dữ liệu webhook sang document MongoDB và dựng payload upsert.</li>
+    <li><b>syncSepayWebhookToMongo</b>, <b>syncSepayWebhookToMongoSafe</b> — <code>src/services/mongoSepaySync/sync.js:9</code>, <code>:66</code> — Đồng bộ dữ liệu webhook SePay sang MongoDB và bọc lỗi để không làm gãy luồng webhook chính.</li>
+  </ul>
+
+  <h3><code>src/services/mail.service.js</code></h3>
+  <ul>
+    <li><b>getMailConfig</b> — <code>src/services/mail.service.js:5</code> — Đọc cấu hình SMTP, sender và frontend URL.</li>
+    <li><b>assertMailConfigured</b> — <code>src/services/mail.service.js:26</code> — Chặn gửi mail nếu biến môi trường email chưa đủ.</li>
+    <li><b>escapeHtml</b> — <code>src/services/mail.service.js:40</code> — Escape nội dung chèn vào HTML email để tránh vỡ template.</li>
+    <li><b>buildPasswordResetHtml</b> — <code>src/services/mail.service.js:48</code> — Tạo nội dung HTML mail đặt lại mật khẩu.</li>
+    <li><b>sendPasswordResetEmail</b> — <code>src/services/mail.service.js:91</code> — Gửi mail reset password thật qua SMTP.</li>
+  </ul>
+
+  <h2>4. Controller xác thực, người dùng và dữ liệu nền</h2>
+
+  <h3><code>src/controllers/auth.controller.js</code> và thư mục <code>src/controllers/auth/</code></h3>
+  <ul>
+    <li><b>Vai trò facade</b> — <code>src/controllers/auth.controller.js:1</code> — Chỉ gom export từ các module auth nhỏ hơn để route cũ tiếp tục hoạt động.</li>
+    <li><b>register</b>, <b>login</b> — <code>src/controllers/auth/account.controller.js:10</code>, <code>:68</code> — Xử lý đăng ký, đăng nhập, kiểm tra block account và trả JWT cho frontend.</li>
+    <li><b>requestPasswordReset</b>, <b>verifyPasswordResetToken</b>, <b>resetPassword</b> — <code>src/controllers/auth/password.controller.js:16</code>, <code>:53</code>, <code>:89</code> — Điều phối luồng quên mật khẩu, kiểm tra token và đổi mật khẩu mới.</li>
+    <li><b>getJwtSecret</b>, <b>getFrontendUrl</b>, <b>isValidEmail</b>, <b>buildBlockedAccountMessage</b>, <b>validatePasswordPayload</b>, <b>buildAccessToken</b>, <b>mapAuthResponse</b> — <code>src/controllers/auth/shared.js:8</code>, <code>:11</code>, <code>:14</code>, <code>:17</code>, <code>:27</code>, <code>:43</code>, <code>:64</code> — Các helper dùng chung cho toàn bộ domain auth.</li>
+    <li><b>ensurePasswordResetSchema</b>, <b>getPasswordResetRecord</b>, <b>findActiveUserByEmail</b>, <b>issuePasswordReset</b>, <b>updatePasswordFromResetRecord</b> — <code>src/controllers/auth/passwordReset.service.js:19</code>, <code>:60</code>, <code>:93</code>, <code>:113</code>, <code>:144</code> — Service lo schema, truy vấn và cập nhật dữ liệu reset password.</li>
+  </ul>
+
+  <h3><code>src/controllers/customer.controller.js</code></h3>
+  <ul>
+    <li><b>normalizeBlockReason</b> — <code>src/controllers/customer.controller.js:6</code> — Chuẩn hóa lý do khóa tài khoản khách hàng.</li>
+    <li><b>ensureCustomerStatusSchema</b> — <code>src/controllers/customer.controller.js:12</code> — Đảm bảo schema user/customer có đủ cột status và block reason.</li>
+    <li><b>formatCurrency</b> — <code>src/controllers/customer.controller.js:27</code> — Định dạng tiền cho thống kê khách hàng.</li>
+    <li><b>getAdminCustomers</b> — <code>src/controllers/customer.controller.js:38</code> — Lấy danh sách khách hàng kèm tổng đơn, tổng chi tiêu và trạng thái tài khoản cho admin.</li>
+    <li><b>updateCustomerStatus</b> — <code>src/controllers/customer.controller.js:128</code> — Khóa/mở khóa tài khoản khách hàng và lưu lý do chặn.</li>
+  </ul>
+
+  <h3><code>src/controllers/category.controller.js</code></h3>
+  <ul>
+    <li><b>getCategories</b> — <code>src/controllers/category.controller.js:5</code> — Lấy cây danh mục sản phẩm để frontend/admin dùng.</li>
+    <li><b>createCategory</b> — <code>src/controllers/category.controller.js:36</code> — Tạo danh mục mới, có kiểm tra cha-con và trùng lặp.</li>
+    <li><b>deleteCategory</b> — <code>src/controllers/category.controller.js:126</code> — Xóa danh mục khi không còn ràng buộc dữ liệu quan trọng.</li>
+  </ul>
+
+  <h3><code>src/controllers/goldRate.controller.js</code></h3>
+  <ul>
+    <li><b>normalizeMaterialKey</b> — <code>src/controllers/goldRate.controller.js:3</code> — Chuẩn hóa khóa vật liệu để nhóm lịch sử giá vàng.</li>
+    <li><b>normalizeMaterialType</b> — <code>src/controllers/goldRate.controller.js:12</code> — Chuyển material type về dạng canonical để lưu/đọc nhất quán.</li>
+    <li><b>toCanonicalGoldRate</b> — <code>src/controllers/goldRate.controller.js:32</code> — Chuẩn hóa một bản ghi giá vàng thành cấu trúc chuẩn.</li>
+    <li><b>getLatestRatesByCanonicalMaterial</b> — <code>src/controllers/goldRate.controller.js:37</code> — Lấy bản ghi mới nhất cho từng loại vàng.</li>
+    <li><b>getGoldRates</b> — <code>src/controllers/goldRate.controller.js:57</code> — Trả lịch sử hoặc snapshot giá vàng mới nhất cho frontend/admin.</li>
+    <li><b>getMaterialOptions</b> — <code>src/controllers/goldRate.controller.js:89</code> — Trả danh sách loại vật liệu phục vụ form cấu hình và pricing.</li>
+    <li><b>createGoldRate</b> — <code>src/controllers/goldRate.controller.js:119</code> — Thêm bản ghi giá vàng mới để toàn hệ thống cập nhật giá sản phẩm.</li>
+  </ul>
+
+  <h3><code>src/controllers/banner.controller.js</code></h3>
+  <ul>
+    <li><b>saveBannerImage</b> — <code>src/controllers/banner.controller.js:7</code> — Lưu ảnh banner base64 thành file thật trong uploads.</li>
+    <li><b>normalizeBannerImageInputs</b> — <code>src/controllers/banner.controller.js:38</code> — Chuẩn hóa tập ảnh banner mà admin gửi lên.</li>
+    <li><b>removeLocalBannerImage</b> — <code>src/controllers/banner.controller.js:48</code> — Xóa file banner local khi cập nhật hoặc xóa banner.</li>
+    <li><b>getHomeHeroBanner</b> — <code>src/controllers/banner.controller.js:82</code> — Lấy banner hero để hiển thị ngoài trang chủ.</li>
+    <li><b>getAdminHomeHeroBanner</b> — <code>src/controllers/banner.controller.js:116</code> — Lấy banner hero theo góc nhìn admin để chỉnh sửa.</li>
+    <li><b>upsertAdminHomeHeroBanner</b> — <code>src/controllers/banner.controller.js:143</code> — Tạo/cập nhật banner hero.</li>
+    <li><b>deleteAdminHomeHeroBanner</b> — <code>src/controllers/banner.controller.js:187</code> — Xóa banner hero và dọn ảnh liên quan.</li>
+  </ul>
+
+  <h3><code>src/controllers/shipping.controller.js</code></h3>
+  <ul>
+    <li><b>toPositiveInteger</b> — <code>src/controllers/shipping.controller.js:14</code> — Chuẩn hóa số nguyên dương cho district, weight, size.</li>
+    <li><b>handleError</b> — <code>src/controllers/shipping.controller.js:25</code> — Chuẩn hóa cách trả lỗi từ GHN service ra HTTP response.</li>
+    <li><b>getShippingConfig</b> — <code>src/controllers/shipping.controller.js:43</code> — Trả cấu hình GHN public cho frontend biết hệ thống đã bật ship chưa.</li>
+    <li><b>getShippingProvinces</b> — <code>src/controllers/shipping.controller.js:55</code> — Lấy tỉnh/thành GHN.</li>
+    <li><b>getShippingDistricts</b> — <code>src/controllers/shipping.controller.js:69</code> — Lấy quận/huyện GHN theo tỉnh.</li>
+    <li><b>getShippingWards</b> — <code>src/controllers/shipping.controller.js:89</code> — Lấy phường/xã GHN theo quận huyện.</li>
+    <li><b>calculateShippingFee</b> — <code>src/controllers/shipping.controller.js:109</code> — Tính phí giao hàng thực tế qua GHN theo địa chỉ và kiện hàng.</li>
+    <li><b>createShippingOrder</b> — <code>src/controllers/shipping.controller.js:123</code> — Tạo vận đơn GHN từ request trực tiếp.</li>
+    <li><b>getShippingOrderDetail</b> — <code>src/controllers/shipping.controller.js:137</code> — Xem chi tiết vận đơn GHN.</li>
+    <li><b>cancelShippingOrder</b> — <code>src/controllers/shipping.controller.js:152</code> — Hủy vận đơn GHN.</li>
+  </ul>
+
+  <h3><code>src/controllers/aiChat.controller.js</code></h3>
+  <ul>
+    <li><b>requestJson</b> — <code>src/controllers/aiChat.controller.js:20</code> — Hàm HTTP thấp tầng để gọi API AI bằng HTTPS thuần.</li>
+    <li><b>callOpenAIChatCompletion</b> — <code>src/controllers/aiChat.controller.js:72</code> — Gọi OpenAI Chat Completions cho tư vấn trang sức.</li>
+    <li><b>toGeminiContents</b> — <code>src/controllers/aiChat.controller.js:95</code> — Chuyển lịch sử chat sang format mà Gemini yêu cầu.</li>
+    <li><b>callGeminiGenerateContent</b> — <code>src/controllers/aiChat.controller.js:104</code> — Gọi Gemini nếu hệ thống cấu hình provider này.</li>
+    <li><b>normalizeHistory</b> — <code>src/controllers/aiChat.controller.js:138</code> — Chuẩn hóa số lượng và format history người dùng gửi lên.</li>
+    <li><b>askAiAdvisor</b> — <code>src/controllers/aiChat.controller.js:158</code> — Endpoint AI advisor: nhận câu hỏi, chọn provider AI và trả nội dung tư vấn.</li>
+  </ul>
+
+  <h3><code>src/controllers/chat.controller.js</code> và thư mục <code>src/controllers/chat/</code></h3>
+  <ul>
+    <li><b>Vai trò facade</b> — <code>src/controllers/chat.controller.js:1</code> — Chỉ gom export từ các controller chat nhỏ hơn để route chat cũ không cần thay đổi.</li>
+    <li><b>deleteMyMessage</b>, <b>getMyConversation</b>, <b>sendMyMessage</b>, <b>streamMyConversation</b> — <code>src/controllers/chat/customer.controller.js:18</code>, <code>:58</code>, <code>:95</code>, <code>:137</code> — Các endpoint chat phía khách hàng/guest.</li>
+    <li><b>getAdminConversations</b>, <b>getAdminConversationMessages</b>, <b>sendAdminMessage</b>, <b>deleteAdminMessage</b>, <b>deleteAdminConversation</b>, <b>streamAdminConversations</b> — <code>src/controllers/chat/admin.controller.js:13</code>, <code>:31</code>, <code>:67</code>, <code>:104</code>, <code>:144</code>, <code>:178</code> — Các endpoint quản trị và luồng realtime cho admin.</li>
+    <li><b>getActorFromRequest</b>, <b>isChatAuthError</b>, <b>sendChatAuthError</b>, <b>formatDateTime</b> — <code>src/controllers/chat/shared.js</code> — Helper xác thực actor chat, chuẩn hóa lỗi và định dạng dữ liệu dùng chung.</li>
+    <li><b>ensureChatSchema</b> — <code>src/controllers/chat/schema.js:5</code> — Tự đảm bảo schema chat trong SQL Server đã có đủ bảng và cột cần thiết.</li>
+    <li><b>registerConversationSubscriber</b>, <b>notifyConversationSubscribers</b>, <b>registerAdminSubscriber</b>, <b>notifyAdminSubscribers</b>, <b>writeSseEvent</b> — <code>src/controllers/chat/realtime.js</code> — Quản lý SSE subscriber và phát sự kiện realtime.</li>
+    <li><b>ensureConversationForActor</b>, <b>getConversationMessages</b>, <b>getConversationSummaryById</b>, <b>getAdminConversationSummaries</b>, <b>postMessageToConversation</b>, <b>deleteMyMessageByActor</b>, <b>markConversationSeenByAdmin</b>, <b>deleteAdminMessageById</b>, <b>deleteAdminConversationById</b> — <code>src/controllers/chat/service.js:106</code>, <code>:116</code>, <code>:131</code>, <code>:141</code>, <code>:170</code>, <code>:248</code>, <code>:293</code>, <code>:302</code>, <code>:338</code> — Toàn bộ nghiệp vụ DB, summary và cập nhật realtime của domain chat.</li>
+  </ul>
+
+  <h2>5. Domain đơn hàng</h2>
+
+  <h3><code>src/controllers/order.controller.js</code></h3>
+  <ul>
+    <li><b>Vai trò aggregator</b> — Vị trí: <code>src/controllers/order.controller.js</code> — Chỉ gom export từ các file <code>orders/*.js</code>, không chứa nghiệp vụ xử lý trực tiếp.</li>
+  </ul>
+
+  <h3><code>src/controllers/orders/shared.js</code></h3>
+  <ul>
+    <li><b>normalizeOrderItems</b> — <code>src/controllers/orders/shared.js:2</code> — Chuẩn hóa item từ request đặt hàng.</li>
+    <li><b>parseJsonSafe</b> — <code>src/controllers/orders/shared.js:15</code> — Parse JSON an toàn cho payment_log và shipping_address.</li>
+    <li><b>buildOrderTitle</b> — <code>src/controllers/orders/shared.js:23</code> — Sinh tiêu đề đơn hàng từ tên hoặc số lượng item.</li>
+    <li><b>mapPaymentMethod</b> — <code>src/controllers/orders/shared.js:41</code> — Chuyển mã phương thức thanh toán sang nhãn hiển thị.</li>
+    <li><b>mapOrderStatus</b> — <code>src/controllers/orders/shared.js:53</code> — Chuyển status nội bộ sang status người dùng đọc được.</li>
+    <li><b>clampNumber</b> — <code>src/controllers/orders/shared.js:66</code> — Chặn giá trị số trong biên cho báo cáo.</li>
+    <li><b>getVietnamNow</b> — <code>src/controllers/orders/shared.js:76</code> — Lấy năm/tháng hiện tại theo múi giờ Việt Nam.</li>
+    <li><b>normalizeReportFilters</b> — <code>src/controllers/orders/shared.js:92</code> — Chuẩn hóa filter báo cáo doanh thu.</li>
+    <li><b>mapReportRow</b> — <code>src/controllers/orders/shared.js:103</code> — Map từng dòng SQL báo cáo sang object frontend.</li>
+    <li><b>buildReportSummary</b> — <code>src/controllers/orders/shared.js:112</code> — Tính tổng doanh thu, số đơn, AOV từ tập rows báo cáo.</li>
+    <li><b>formatCurrency</b> — <code>src/controllers/orders/shared.js:135</code> — Định dạng VND cho báo cáo/admin.</li>
+    <li><b>formatDateTime</b> — <code>src/controllers/orders/shared.js:142</code> — Định dạng timestamp đơn hàng.</li>
+    <li><b>buildStoredOrderGhnItems</b> — <code>src/controllers/orders/shared.js:157</code> — Dựng danh sách item GHN từ order_items trong DB.</li>
+    <li><b>buildInternalOrderCode</b> — <code>src/controllers/orders/shared.js:174</code> — Sinh mã đơn nội bộ dạng <code>ODxxxxx</code>.</li>
+    <li><b>buildPaymentReference</b> — <code>src/controllers/orders/shared.js:176</code> — Sinh mã thanh toán SePay dạng <code>DHxxxxxx</code>.</li>
+    <li><b>normalizeMoney</b> — <code>src/controllers/orders/shared.js:179</code> — Chuẩn hóa tiền về số nguyên để đối soát.</li>
+    <li><b>toPositiveIntegerOrNull</b> — <code>src/controllers/orders/shared.js:181</code> — Chuẩn hóa trọng lượng/kích thước kiện hàng.</li>
+    <li><b>getSepayConfig</b> — <code>src/controllers/orders/shared.js:191</code> — Đọc cấu hình SePay static QR.</li>
+    <li><b>buildSepayQrUrl</b> — <code>src/controllers/orders/shared.js:206</code> — Tạo URL QR SePay cho chuyển khoản.</li>
+    <li><b>normalizeAccountIdentifier</b> — <code>src/controllers/orders/shared.js:222</code> — Chuẩn hóa số tài khoản/VA để so khớp.</li>
+    <li><b>buildStaticSepayPayment</b> — <code>src/controllers/orders/shared.js:228</code> — Dựng payload thanh toán SePay dạng QR tĩnh.</li>
+    <li><b>buildVirtualAccountPayment</b> — <code>src/controllers/orders/shared.js:258</code> — Dựng payload thanh toán bằng virtual account.</li>
+    <li><b>buildSharedVirtualAccountPayment</b> — <code>src/controllers/orders/shared.js:287</code> — Dựng payload VA dùng chung cho checkout hiện tại.</li>
+    <li><b>extractSepayAccountTargets</b> — <code>src/controllers/orders/shared.js:318</code> — Lấy các account/subaccount khả dĩ từ webhook SePay.</li>
+    <li><b>getStoredPaymentAccountTargets</b> — <code>src/controllers/orders/shared.js:339</code> — Lấy account đã lưu trong payment_log để đối soát.</li>
+    <li><b>escapeLikePattern</b> — <code>src/controllers/orders/shared.js:358</code> — Escape ký tự đặc biệt cho truy vấn SQL LIKE.</li>
+    <li><b>getHeaderValue</b> — <code>src/controllers/orders/shared.js:365</code> — Lấy header an toàn từ request.</li>
+    <li><b>pickFirstDefinedValue</b> — <code>src/controllers/orders/shared.js:375</code> — Chọn giá trị đầu tiên không rỗng giữa nhiều alias field.</li>
+    <li><b>toOptionalString</b> — <code>src/controllers/orders/shared.js:387</code> — Chuẩn hóa dữ liệu string nullable.</li>
+    <li><b>toOptionalLowercaseString</b> — <code>src/controllers/orders/shared.js:396</code> — Chuẩn hóa string lowercase nullable.</li>
+    <li><b>toOptionalNumber</b> — <code>src/controllers/orders/shared.js:401</code> — Chuẩn hóa number nullable.</li>
+    <li><b>parseEnvBoolean</b> — <code>src/controllers/orders/shared.js:406</code> — Parse biến môi trường boolean.</li>
+    <li><b>getSepayWebhookSecurityConfig</b> — <code>src/controllers/orders/shared.js:424</code> — Đọc rule secret cho webhook SePay.</li>
+    <li><b>isSepayWebhookAuthorized</b> — <code>src/controllers/orders/shared.js:437</code> — Xác minh request webhook có secret hợp lệ hay không.</li>
+    <li><b>normalizeSepayPayload</b> — <code>src/controllers/orders/shared.js:462</code> — Chuẩn hóa nhiều dạng payload SePay về một schema chung.</li>
+    <li><b>buildSepayWebhookDebugInfo</b> — <code>src/controllers/orders/shared.js:520</code> — Tạo object debug log cho webhook.</li>
+    <li><b>extractSepayReferences</b> — <code>src/controllers/orders/shared.js:544</code> — Rút mã đơn, mã thanh toán từ nội dung chuyển khoản.</li>
+    <li><b>extractOrderIdFromReference</b> — <code>src/controllers/orders/shared.js:568</code> — Tách orderId từ mã <code>DH/OD</code>.</li>
+    <li><b>pickSepayCandidateOrder</b> — <code>src/controllers/orders/shared.js:583</code> — Chọn đơn hàng phù hợp nhất để đối soát webhook SePay.</li>
+  </ul>
+
+  <h3><code>src/controllers/orders/shippingFlow.js</code></h3>
+  <ul>
+    <li><b>ensureGhnShippingForPaidOrder</b> — <code>src/controllers/orders/shippingFlow.js:13</code> — Sau khi đơn prepaid đã thanh toán, tự động kiểm tra và tạo vận đơn GHN nếu đủ điều kiện.</li>
+    <li><b>ensureGhnShippingForPaidOrderSafe</b> — <code>src/controllers/orders/shippingFlow.js:228</code> — Wrapper chống crash cho luồng auto-create GHN.</li>
+  </ul>
+
+  <h3><code>src/controllers/orders/admin.controller.js</code></h3>
+  <ul>
+    <li><b>normalizeAdminOrderStatus</b> — <code>src/controllers/orders/admin.controller.js:15</code> — Chuẩn hóa status admin hợp lệ.</li>
+    <li><b>mapAdminOrderStatus</b> — <code>src/controllers/orders/admin.controller.js:20</code> — Đổi status admin sang nhãn hiển thị.</li>
+    <li><b>buildAdminOrderSummary</b> — <code>src/controllers/orders/admin.controller.js:31</code> — Tính summary đầu trang danh sách đơn hàng admin.</li>
+    <li><b>mapAdminOrder</b> — <code>src/controllers/orders/admin.controller.js:51</code> — Map đơn hàng DB sang object admin UI.</li>
+    <li><b>getAdminRevenueReport</b> — <code>src/controllers/orders/admin.controller.js:102</code> — Lấy báo cáo doanh thu theo ngày/tháng/năm.</li>
+    <li><b>getAdminOrders</b> — <code>src/controllers/orders/admin.controller.js:238</code> — Lấy danh sách toàn bộ đơn hàng cho admin.</li>
+    <li><b>updateAdminOrderStatus</b> — <code>src/controllers/orders/admin.controller.js:333</code> — Cập nhật trạng thái đơn hàng và đồng bộ payment/shipping status liên quan.</li>
+  </ul>
+
+  <h3><code>src/controllers/orders/customer.controller.js</code></h3>
+  <ul>
+    <li><b>createCustomerOrder</b> — <code>src/controllers/orders/customer.controller.js:23</code> — Tạo đơn hàng khách, tạo payment log và tùy trường hợp sẽ tạo luôn GHN hoặc chuẩn bị SePay prepaid.</li>
+    <li><b>getMyOrders</b> — <code>src/controllers/orders/customer.controller.js:326</code> — Lấy danh sách đơn của user đang đăng nhập.</li>
+    <li><b>getMyOrderPaymentStatus</b> — <code>src/controllers/orders/customer.controller.js:480</code> — Kiểm tra trạng thái thanh toán hiện tại của một đơn.</li>
+  </ul>
+
+  <h3><code>src/controllers/orders/sepay.controller.js</code></h3>
+  <ul>
+    <li><b>getSepayWebhookHealth</b> — <code>src/controllers/orders/sepay.controller.js:22</code> — Health check cho route webhook SePay.</li>
+    <li><b>handleSepayWebhook</b> — <code>src/controllers/orders/sepay.controller.js:62</code> — Xử lý webhook SePay: xác thực secret, đối soát đơn, cập nhật payment và kích hoạt auto-create GHN.</li>
+  </ul>
+
+  <h2>6. Domain sản phẩm</h2>
+
+  <h3><code>src/controllers/product.controller.js</code></h3>
+  <ul>
+    <li><b>Vai trò aggregator</b> — Vị trí: <code>src/controllers/product.controller.js</code> — Chỉ gom export từ các file <code>products/*.js</code>.</li>
+  </ul>
+
+  <h3><code>src/controllers/products/shared.js</code></h3>
+  <ul>
+    <li><b>formatCurrency</b> — <code>src/controllers/products/shared.js:8</code> — Định dạng VND cho giá sản phẩm.</li>
+    <li><b>normalizeLabel</b> — <code>src/controllers/products/shared.js:18</code> — Chuẩn hóa nhãn hiển thị vật liệu/trạng thái.</li>
+    <li><b>buildBadge</b> — <code>src/controllers/products/shared.js:26</code> — Sinh badge ngắn cho thẻ sản phẩm client.</li>
+    <li><b>formatDateTime</b> — <code>src/controllers/products/shared.js:40</code> — Định dạng ngày hiển thị trong sản phẩm/review.</li>
+    <li><b>computeSalePrice</b> — <code>src/controllers/products/shared.js:52</code> — Công thức tính giá bán từ giá vàng, trọng lượng và phụ phí.</li>
+    <li><b>mapPriceTier</b> — <code>src/controllers/products/shared.js:67</code> — Chuẩn hóa bậc giá theo số lượng mua.</li>
+    <li><b>normalizePriceTierInputs</b> — <code>src/controllers/products/shared.js:88</code> — Chuẩn hóa input price tier từ admin form.</li>
+    <li><b>parseNonNegativeNumberInput</b> — <code>src/controllers/products/shared.js:124</code> — Parse các trường số không âm.</li>
+    <li><b>getVariantInputSource</b> — <code>src/controllers/products/shared.js:153</code> — Chọn nguồn variant từ mảng variants hoặc fallback field cũ.</li>
+    <li><b>findInvalidNumericProductFields</b> — <code>src/controllers/products/shared.js:167</code> — Liệt kê các trường số không hợp lệ trước khi tạo/cập nhật sản phẩm.</li>
+    <li><b>ensureProductPriceTiersSchema</b> — <code>src/controllers/products/shared.js:204</code> — Bảo đảm bảng price tier của sản phẩm tồn tại và đủ cột.</li>
+    <li><b>replaceProductPriceTiers</b> — <code>src/controllers/products/shared.js:229</code> — Xóa và ghi lại toàn bộ bậc giá của một sản phẩm.</li>
+    <li><b>normalizeVariantInputs</b> — <code>src/controllers/products/shared.js:261</code> — Chuẩn hóa biến thể sản phẩm từ request admin.</li>
+    <li><b>findDuplicateVariantSku</b> — <code>src/controllers/products/shared.js:289</code> — Phát hiện SKU trùng trong chính request.</li>
+    <li><b>validateVariantSkusAvailable</b> — <code>src/controllers/products/shared.js:309</code> — Kiểm tra SKU có đang trùng với DB hay không.</li>
+    <li><b>upsertProductVariants</b> — <code>src/controllers/products/shared.js:330</code> — Tạo mới hoặc cập nhật biến thể và tồn kho đi kèm.</li>
+    <li><b>retireMissingProductVariants</b> — <code>src/controllers/products/shared.js:403</code> — Vô hiệu/xóa các biến thể đã bị bỏ khỏi form cập nhật nhưng vẫn phải giữ an toàn dữ liệu nghiệp vụ.</li>
+    <li><b>resolveCompareMaxItems</b> — <code>src/controllers/products/shared.js:459</code> — Quy định số lượng sản phẩm được so sánh cùng lúc.</li>
+    <li><b>saveProductImage</b> — <code>src/controllers/products/shared.js:469</code> — Lưu ảnh sản phẩm từ base64 thành file thật.</li>
+    <li><b>buildAdminStatusLabel</b> — <code>src/controllers/products/shared.js:501</code> — Đổi status sản phẩm sang nhãn admin.</li>
+    <li><b>buildAdminProducts</b> — <code>src/controllers/products/shared.js:519</code> — Gộp dữ liệu sản phẩm, ảnh, tồn kho, price tier thành object admin list.</li>
+  </ul>
+
+  <h3><code>src/controllers/products/client.controller.js</code></h3>
+  <ul>
+    <li><b>getClientProducts</b> — <code>src/controllers/products/client.controller.js:12</code> — Lấy danh sách sản phẩm bán ra ngoài client, hỗ trợ tìm kiếm, lọc và phân trang.</li>
+    <li><b>getFeaturedProducts</b> — <code>src/controllers/products/client.controller.js:176</code> — Lấy danh sách sản phẩm nổi bật/còn hàng để hiển thị nhanh ở trang chủ.</li>
+    <li><b>getProductDetail</b> — <code>src/controllers/products/client.controller.js:293</code> — Trả toàn bộ chi tiết sản phẩm gồm ảnh, biến thể, chứng nhận, review và pricing.</li>
+  </ul>
+
+  <h3><code>src/controllers/products/engagement.controller.js</code></h3>
+  <ul>
+    <li><b>getCompareConfig</b> — <code>src/controllers/products/engagement.controller.js:9</code> — Trả cấu hình số lượng sản phẩm được phép compare.</li>
+    <li><b>previewCompareProducts</b> — <code>src/controllers/products/engagement.controller.js:22</code> — Lấy dữ liệu rút gọn của các sản phẩm để render màn so sánh.</li>
+    <li><b>createProductReview</b> — <code>src/controllers/products/engagement.controller.js:159</code> — Tạo đánh giá mới hoặc trả lời một đánh giá có sẵn.</li>
+    <li><b>deleteOwnProductReview</b> — <code>src/controllers/products/engagement.controller.js:280</code> — Cho phép người dùng tự xóa review của chính mình.</li>
+  </ul>
+
+  <h3><code>src/controllers/products/admin.controller.js</code></h3>
+  <ul>
+    <li><b>getAdminProducts</b> — <code>src/controllers/products/admin.controller.js:17</code> — Lấy danh sách sản phẩm đầy đủ cho màn quản trị.</li>
+    <li><b>createAdminProduct</b> — <code>src/controllers/products/admin.controller.js:112</code> — Tạo sản phẩm mới, biến thể, pricing config, price tier và ảnh chính.</li>
+    <li><b>updateAdminProduct</b> — <code>src/controllers/products/admin.controller.js:324</code> — Cập nhật sản phẩm, đồng bộ biến thể/tồn kho, price tier và ảnh đại diện.</li>
+    <li><b>deleteAdminProduct</b> — <code>src/controllers/products/admin.controller.js:600</code> — Xóa hẳn sản phẩm nếu chưa phát sinh giao dịch hoặc lịch sử kho.</li>
+    <li><b>deleteAllAdminProducts</b> — <code>src/controllers/products/admin.controller.js:707</code> — Xóa toàn bộ catalog sản phẩm khi hệ thống chưa có giao dịch ràng buộc.</li>
+    <li><b>hideAllAdminProducts</b> — <code>src/controllers/products/admin.controller.js:801</code> — Ẩn toàn bộ sản phẩm khỏi client nhưng giữ dữ liệu.</li>
+    <li><b>hideAdminProduct</b> — <code>src/controllers/products/admin.controller.js:844</code> — Ẩn một sản phẩm cụ thể.</li>
+    <li><b>showAdminProduct</b> — <code>src/controllers/products/admin.controller.js:889</code> — Hiện lại một sản phẩm đã bị ẩn.</li>
+  </ul>
+
+  <h2>7. Route map và vị trí điều hướng nghiệp vụ</h2>
+
+  <p>Các file route không chứa xử lý nghiệp vụ chính, nhưng đây là nơi xác định endpoint nào gọi vào controller nào:</p>
+  <ul>
+    <li><code>src/routes/auth.routes.js</code> — map các route đăng ký, đăng nhập, reset password.</li>
+    <li><code>src/routes/category.routes.js</code> — map route danh mục sản phẩm.</li>
+    <li><code>src/routes/banner.routes.js</code> — map route banner trang chủ.</li>
+    <li><code>src/routes/goldRate.routes.js</code> — map route giá vàng và material options.</li>
+    <li><code>src/routes/product.routes.js</code> — map route client/admin product, compare và review.</li>
+    <li><code>src/routes/customer.routes.js</code> — map route admin quản lý khách hàng.</li>
+    <li><code>src/routes/chat.routes.js</code> — map route chat khách hàng/admin và SSE.</li>
+    <li><code>src/routes/aiChat.routes.js</code> — map route AI advisor.</li>
+    <li><code>src/routes/shipping.routes.js</code> — map route GHN config, địa chỉ, phí ship, vận đơn.</li>
+    <li><code>src/routes/order.routes.js</code> — map route đặt hàng, admin order và SePay webhook.</li>
+  </ul>
+
+  <h2>8. Kết luận sử dụng tài liệu</h2>
+  <p>Nếu bạn cần sửa một nghiệp vụ cụ thể, có thể đi theo hướng sau:</p>
+  <ul>
+    <li><b>Đăng nhập, reset mật khẩu:</b> bắt đầu từ <code>auth.controller.js</code> và <code>mail.service.js</code>.</li>
+    <li><b>Đặt hàng, SePay, GHN:</b> bắt đầu từ <code>orders/customer.controller.js</code>, <code>orders/sepay.controller.js</code>, <code>orders/shippingFlow.js</code> và <code>ghn.service.js</code>.</li>
+    <li><b>Sản phẩm và giá bán:</b> bắt đầu từ <code>products/shared.js</code>, <code>products/admin.controller.js</code> và <code>goldRate.controller.js</code>.</li>
+    <li><b>Chat realtime:</b> bắt đầu từ <code>chat.controller.js</code>.</li>
+    <li><b>Vận chuyển:</b> bắt đầu từ <code>shipping.controller.js</code> và <code>ghn.service.js</code>.</li>
+  </ul>
+
+  <p><b>File tài liệu này có thể tiếp tục mở rộng</b> nếu bạn muốn mình bổ sung thêm sơ đồ luồng dữ liệu, sơ đồ route-to-controller-to-service, hoặc chi tiết SQL của từng hàm.</p>
+</body>
+</html>
