@@ -18,6 +18,10 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ];
+const DEFAULT_ALLOWED_ORIGIN_PATTERNS = [
+  /^http:\/\/localhost(?::\d+)?$/i,
+  /^http:\/\/127\.0\.0\.1(?::\d+)?$/i,
+];
 
 const parseCsvEnv = (value = "") =>
   String(value || "")
@@ -25,20 +29,45 @@ const parseCsvEnv = (value = "") =>
     .map((item) => item.trim().replace(/\/+$/, ""))
     .filter(Boolean);
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const wildcardToRegExp = (value) => {
+  if (!value.includes("*")) {
+    return null;
+  }
+
+  const regexSource = `^${value.split("*").map(escapeRegex).join(".*")}$`;
+  return new RegExp(regexSource, "i");
+};
+
 const frontendUrl = String(process.env.FRONTEND_URL || "")
   .trim()
   .replace(/\/+$/, "");
-const configuredOrigins = [
+const configuredOriginEntries = [
   ...new Set([
     ...parseCsvEnv(process.env.CORS_ALLOWED_ORIGINS),
     ...(frontendUrl ? [frontendUrl] : []),
   ]),
 ];
-const allowedOrigins = configuredOrigins.length
-  ? configuredOrigins
-  : DEFAULT_ALLOWED_ORIGINS;
+const allowedOrigins = [
+  ...new Set(
+    (configuredOriginEntries.length ? configuredOriginEntries : DEFAULT_ALLOWED_ORIGINS).filter(
+      (entry) => !entry.includes("*")
+    )
+  ),
+];
+const allowedOriginPatterns = [
+  ...DEFAULT_ALLOWED_ORIGIN_PATTERNS,
+  ...configuredOriginEntries
+    .map((entry) => wildcardToRegExp(entry))
+    .filter(Boolean),
+];
 const jsonBodyLimit =
   String(process.env.JSON_BODY_LIMIT || "10mb").trim() || "10mb";
+
+const isOriginAllowed = (origin) =>
+  allowedOrigins.includes(origin) ||
+  allowedOriginPatterns.some((pattern) => pattern.test(origin));
 
 app.disable("x-powered-by");
 app.set("trust proxy", 1);
@@ -47,11 +76,12 @@ app.set("trust proxy", 1);
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin || isOriginAllowed(origin)) {
         return callback(null, true);
       }
 
-      return callback(new Error("Origin is not allowed by CORS."));
+      console.warn("Blocked by CORS:", origin);
+      return callback(null, false);
     },
   }),
 );
