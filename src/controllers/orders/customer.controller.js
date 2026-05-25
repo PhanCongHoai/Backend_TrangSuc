@@ -21,6 +21,9 @@ const {
 } = require("./shared");
 const { notifyOrderSubscribers } = require("./realtime");
 
+const FALLBACK_PRODUCT_IMAGE =
+  "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ1xp79XGKoIg-gZeZiRg2G7mpp2A6kH-AWow&s";
+
 // Tạo đơn hàng cho khách, đồng thời chuẩn bị thanh toán SePay hoặc tạo GHN nếu cần.
 const createCustomerOrder = async (req, res) => {
   try {
@@ -391,6 +394,19 @@ const getMyOrders = async (req, res) => {
     });
 
     const itemsResult = await itemRequest.query(`
+      WITH primary_images AS (
+        SELECT
+          product_id,
+          url,
+          ROW_NUMBER() OVER (
+            PARTITION BY product_id
+            ORDER BY
+              CASE WHEN is_main = 1 THEN 0 ELSE 1 END,
+              id ASC
+          ) AS rn
+        FROM product_images
+        WHERE NULLIF(LTRIM(RTRIM(url)), '') IS NOT NULL
+      )
       SELECT
         oi.order_id,
         oi.variant_id,
@@ -398,10 +414,14 @@ const getMyOrders = async (req, res) => {
         oi.unit_price,
         oi.total_price,
         pv.product_id,
-        p.name AS product_name
+        p.name AS product_name,
+        img.url AS image_url
       FROM order_items oi
       INNER JOIN product_variants pv ON pv.id = oi.variant_id
       INNER JOIN products p ON p.id = pv.product_id
+      LEFT JOIN primary_images img
+        ON img.product_id = pv.product_id
+        AND img.rn = 1
       WHERE oi.order_id IN (${orderIdParams.join(", ")})
       ORDER BY oi.order_id DESC, oi.id ASC
     `);
@@ -416,6 +436,7 @@ const getMyOrders = async (req, res) => {
         productId: Number(item.product_id || 0),
         variantId: Number(item.variant_id || 0),
         name: item.product_name,
+        image: item.image_url || FALLBACK_PRODUCT_IMAGE,
         quantity: Number(item.quantity || 0),
         unitPrice: Number(item.unit_price || 0),
         totalPrice: Number(item.total_price || 0),

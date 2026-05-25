@@ -4,7 +4,6 @@ const {
   syncSepayWebhookToMongoSafe,
 } = require("../../services/mongoSepaySync.service");
 const { ensureGhnShippingForPaidOrderSafe } = require("./shippingFlow");
-const { notifyOrderSubscribers } = require("./realtime");
 const {
   buildPaymentReference,
   buildSepayWebhookDebugInfo,
@@ -63,10 +62,15 @@ const getSepayWebhookHealth = async (req, res) => {
 
 // Xử lý webhook SePay: xác thực secret, đối soát đơn, ghi nhận thanh toán và đồng bộ sau xử lý.
 const handleSepayWebhook = async (req, res) => {
-  console.log("[SePay webhook] Incoming request:", buildSepayWebhookDebugInfo(req));
+  console.log(
+    "[SePay webhook] Incoming request:",
+    buildSepayWebhookDebugInfo(req),
+  );
 
   if (!isSepayWebhookAuthorized(req)) {
-    console.warn("[SePay webhook] Rejected because secret is missing or invalid.");
+    console.warn(
+      "[SePay webhook] Rejected because secret is missing or invalid.",
+    );
     return res.status(401).json({
       success: false,
       message: "Webhook secret không hợp lệ.",
@@ -148,17 +152,17 @@ const handleSepayWebhook = async (req, res) => {
     transaction = new sql.Transaction(pool);
     await transaction.begin();
 
-    const duplicateResult = await new sql.Request(transaction)
-      .input("TransactionId", sql.VarChar(100), String(sepayPayload.id))
-      .query(`
+    const duplicateResult = await new sql.Request(transaction).input(
+      "TransactionId",
+      sql.VarChar(100),
+      String(sepayPayload.id),
+    ).query(`
         SELECT TOP 1
-          payment.order_id,
-          payment.transaction_id,
-          orders.user_id
-        FROM order_payments payment
-        INNER JOIN orders ON orders.id = payment.order_id
-        WHERE payment.transaction_id = @TransactionId
-        ORDER BY payment.id DESC
+          order_id,
+          transaction_id
+        FROM order_payments
+        WHERE transaction_id = @TransactionId
+        ORDER BY id DESC
       `);
 
     if (duplicateResult.recordset[0]) {
@@ -263,7 +267,6 @@ const handleSepayWebhook = async (req, res) => {
     const candidatesResult = await candidateRequest.query(`
       SELECT
         o.id,
-        o.user_id,
         o.status,
         o.payment_status,
         o.total_amount,
@@ -283,7 +286,7 @@ const handleSepayWebhook = async (req, res) => {
       WHERE ${whereClauses.join(" OR ")}
       ORDER BY o.created_at DESC, o.id DESC
     `);
-
+    //So sánh dữ liệu từ sepay và db
     const { order: matchedOrder, reason } = pickSepayCandidateOrder(
       candidatesResult.recordset,
       sepayPayload,
@@ -310,7 +313,11 @@ const handleSepayWebhook = async (req, res) => {
       });
     }
 
-    if (String(matchedOrder.status || "").trim().toUpperCase() === "CANCELLED") {
+    if (
+      String(matchedOrder.status || "")
+        .trim()
+        .toUpperCase() === "CANCELLED"
+    ) {
       await transaction.commit();
       await syncSepayMongo({
         matchedOrder,
@@ -332,17 +339,28 @@ const handleSepayWebhook = async (req, res) => {
     }
 
     if (
-      ["PAID"].includes(String(matchedOrder.payment_status || "").trim().toUpperCase()) ||
-      ["PAID"].includes(String(matchedOrder.payment_row_status || "").trim().toUpperCase())
+      ["PAID"].includes(
+        String(matchedOrder.payment_status || "")
+          .trim()
+          .toUpperCase(),
+      ) ||
+      ["PAID"].includes(
+        String(matchedOrder.payment_row_status || "")
+          .trim()
+          .toUpperCase(),
+      )
     ) {
       await transaction.commit();
-      const shippingResult = await ensureGhnShippingForPaidOrderSafe(Number(matchedOrder.id));
+      const shippingResult = await ensureGhnShippingForPaidOrderSafe(
+        Number(matchedOrder.id),
+      );
       await syncSepayMongo({
         matchedOrder,
         paymentStatus: "PAID",
         paymentReference: String(sepayPayload.code || "").trim(),
         syncStatus: "ALREADY_PAID",
-        syncMessage: "Matched order was already marked as paid before this webhook.",
+        syncMessage:
+          "Matched order was already marked as paid before this webhook.",
       });
       console.log("[SePay webhook] Order already marked paid.", {
         transactionId: sepayPayload.id,
@@ -363,7 +381,9 @@ const handleSepayWebhook = async (req, res) => {
       await syncSepayMongo({
         matchedOrder,
         paymentStatus:
-          matchedOrder.payment_status || matchedOrder.payment_row_status || "UNPAID",
+          matchedOrder.payment_status ||
+          matchedOrder.payment_row_status ||
+          "UNPAID",
         paymentReference: String(sepayPayload.code || "").trim(),
         syncStatus: "AMOUNT_MISMATCH",
         syncMessage: "Transfer amount does not match expected order amount.",
@@ -389,7 +409,9 @@ const handleSepayWebhook = async (req, res) => {
       await syncSepayMongo({
         matchedOrder,
         paymentStatus:
-          matchedOrder.payment_status || matchedOrder.payment_row_status || "UNPAID",
+          matchedOrder.payment_status ||
+          matchedOrder.payment_row_status ||
+          "UNPAID",
         paymentReference: String(sepayPayload.code || "").trim(),
         syncStatus: "PAYMENT_ROW_MISSING",
         syncMessage: "Order exists but payment row is missing in SQL Server.",
@@ -404,7 +426,8 @@ const handleSepayWebhook = async (req, res) => {
     const nextPaymentLog = {
       ...currentPaymentLog,
       paymentReference:
-        currentPaymentLog.paymentReference || buildPaymentReference(matchedOrder.id),
+        currentPaymentLog.paymentReference ||
+        buildPaymentReference(matchedOrder.id),
       paymentProvider: "sepay",
       sepayTransactionId: String(sepayPayload.id),
       paidAt: sepayPayload.transactionDate || new Date().toISOString(),
@@ -430,8 +453,11 @@ const handleSepayWebhook = async (req, res) => {
       .input("PaymentId", sql.Int, Number(matchedOrder.payment_id))
       .input("TransactionId", sql.VarChar(100), String(sepayPayload.id))
       .input("Status", sql.VarChar(50), "PAID")
-      .input("PaymentLog", sql.NVarChar(sql.MAX), JSON.stringify(nextPaymentLog))
-      .query(`
+      .input(
+        "PaymentLog",
+        sql.NVarChar(sql.MAX),
+        JSON.stringify(nextPaymentLog),
+      ).query(`
         UPDATE order_payments
         SET
           transaction_id = @TransactionId,
@@ -443,8 +469,7 @@ const handleSepayWebhook = async (req, res) => {
     await new sql.Request(transaction)
       .input("OrderId", sql.Int, Number(matchedOrder.id))
       .input("PaymentStatus", sql.VarChar(50), "PAID")
-      .input("NextStatus", sql.VarChar(50), "PROCESSING")
-      .query(`
+      .input("NextStatus", sql.VarChar(50), "PROCESSING").query(`
         UPDATE orders
         SET
           payment_status = @PaymentStatus,
@@ -456,15 +481,9 @@ const handleSepayWebhook = async (req, res) => {
       `);
 
     await transaction.commit();
-    const shippingResult = await ensureGhnShippingForPaidOrderSafe(Number(matchedOrder.id));
-    notifyOrderSubscribers({
-      orderId: Number(matchedOrder.id),
-      userId: Number(matchedOrder.user_id || 0),
-      reason: "payment-updated",
-      paymentStatus: "PAID",
-      shippingCode: shippingResult?.orderCode || null,
-      shippingCreated: Boolean(shippingResult?.created),
-    });
+    const shippingResult = await ensureGhnShippingForPaidOrderSafe(
+      Number(matchedOrder.id),
+    );
     await syncSepayMongo({
       matchedOrder: {
         ...matchedOrder,
@@ -502,7 +521,8 @@ const handleSepayWebhook = async (req, res) => {
     console.error("Handle SePay webhook error:", error);
     await syncSepayMongo({
       syncStatus: "PROCESSING_ERROR",
-      syncMessage: error?.message || "Unhandled SePay webhook processing error.",
+      syncMessage:
+        error?.message || "Unhandled SePay webhook processing error.",
     });
     return res.status(500).json({
       success: false,
