@@ -23,6 +23,16 @@ const parseEnvInteger = (value, fallback) => {
   return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : fallback;
 };
 
+const parseDbAuthMode = (value) => {
+  const normalizedValue = String(value || "").trim().toLowerCase();
+
+  if (["explicit", "legacy"].includes(normalizedValue)) {
+    return normalizedValue;
+  }
+
+  return "legacy";
+};
+
 const requiredDbEnv = [
   ["DB_USER", process.env.DB_USER],
   ["DB_PASSWORD", process.env.DB_PASSWORD],
@@ -50,6 +60,7 @@ const config = {
       process.env.DB_TRUST_SERVER_CERTIFICATE,
       true
     ),
+    useUTC: false,
   },
   pool: {
     max: parseEnvInteger(process.env.DB_POOL_MAX, 10),
@@ -83,6 +94,18 @@ const legacyAuthenticationConfig = {
   password: config.password,
 };
 
+const dbAuthMode = parseDbAuthMode(process.env.DB_AUTH_MODE);
+const connectionStrategies =
+  dbAuthMode === "explicit"
+    ? [
+        [explicitAuthenticationConfig, "explicit authentication"],
+        [legacyAuthenticationConfig, "legacy authentication"],
+      ]
+    : [
+        [legacyAuthenticationConfig, "legacy authentication"],
+        [explicitAuthenticationConfig, "explicit authentication"],
+      ];
+
 console.log("Effective DB config:", {
   user: config.user,
   server: config.server,
@@ -91,6 +114,7 @@ console.log("Effective DB config:", {
   encrypt: config.options.encrypt,
   trustServerCertificate: config.options.trustServerCertificate,
   passwordLength: config.password.length,
+  authMode: dbAuthMode,
 });
 
 const connectPool = async (connectionConfig, label) => {
@@ -100,20 +124,32 @@ const connectPool = async (connectionConfig, label) => {
   return pool;
 };
 
-// Initialize one shared SQL Server pool for the whole backend.
-const poolPromise = connectPool(explicitAuthenticationConfig, "explicit authentication")
-  .catch(async (explicitAuthError) => {
-    console.warn(
-      "Explicit SQL authentication connection failed, retrying with legacy mssql config:",
-      explicitAuthError.message
-    );
+const connectWithFallbacks = async () => {
+  let lastError;
+
+  for (let index = 0; index < connectionStrategies.length; index += 1) {
+    const [connectionConfig, label] = connectionStrategies[index];
 
     try {
-      return await connectPool(legacyAuthenticationConfig, "legacy authentication");
-    } catch (legacyAuthError) {
-      console.error("DB connection error:", legacyAuthError);
-      throw legacyAuthError;
+      return await connectPool(connectionConfig, label);
+    } catch (connectionError) {
+      lastError = connectionError;
+
+      if (index < connectionStrategies.length - 1) {
+        const [, fallbackLabel] = connectionStrategies[index + 1];
+        console.warn(
+          `SQL connection with ${label} failed, retrying with ${fallbackLabel}:`,
+          connectionError.message
+        );
+      }
     }
-  });
+  }
+
+  console.error("DB connection error:", lastError);
+  throw lastError;
+};
+
+// Initialize one shared SQL Server pool for the whole backend.
+const poolPromise = connectWithFallbacks();
 
 module.exports = { sql, poolPromise };

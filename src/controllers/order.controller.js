@@ -1,4 +1,5 @@
 const {
+  getAdminDashboardSummary,
   getAdminOrders,
   getAdminRevenueReport,
   updateAdminOrderStatus,
@@ -7,7 +8,15 @@ const {
   createCustomerOrder,
   getMyOrders,
   getMyOrderPaymentStatus,
+  cancelCustomerOrder,
 } = require("./orders/customer.controller");
+const {
+  createReturnRequest,
+  getMyReturnRequests,
+  getAdminReturnRequests,
+  confirmAdminReturnRequest,
+  rejectAdminReturnRequest,
+} = require("./orders/return.controller");
 const {
   streamAdminOrders,
   streamMyOrders,
@@ -18,6 +27,7 @@ const {
 } = require("./orders/sepay.controller");
 
 module.exports = {
+  getAdminDashboardSummary,
   createCustomerOrder,
   getAdminOrders,
   getMyOrders,
@@ -28,4 +38,10 @@ module.exports = {
   streamAdminOrders,
   streamMyOrders,
   updateAdminOrderStatus,
+  cancelCustomerOrder,
+  createReturnRequest,
+  getMyReturnRequests,
+  getAdminReturnRequests,
+  confirmAdminReturnRequest,
+  rejectAdminReturnRequest,
 };

@@ -12,6 +12,9 @@ const chatRoutes = require("./routes/chat.routes");
 const aiChatRoutes = require("./routes/aiChat.routes");
 const shippingRoutes = require("./routes/shipping.routes");
 const orderRoutes = require("./routes/order.routes");
+const promotionRoutes = require("./routes/promotion.routes");
+const cartRoutes = require("./routes/cart.routes");
+const { responseMessageNormalizer } = require("./middlewares/responseMessageNormalizer");
 
 const app = express();
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -87,6 +90,7 @@ app.use(
 );
 app.use(express.json({ limit: jsonBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: jsonBodyLimit }));
+app.use(responseMessageNormalizer);
 app.use("/uploads", express.static(path.resolve(__dirname, "../uploads")));
 
 // Route kiểm tra nhanh backend đã khởi động thành công hay chưa.
@@ -114,6 +118,8 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/ai-chat", aiChatRoutes);
 app.use("/api/shipping", shippingRoutes);
 app.use("/api/orders", orderRoutes);
+app.use("/api/promotions", promotionRoutes);
+app.use("/api/cart", cartRoutes);
 
 // start server
 const PORT = process.env.PORT || 5000;

@@ -20,7 +20,8 @@ const isChatAuthError = (error) =>
   error?.code === "TOKEN_EXPIRED" ||
   error?.code === "INVALID_TOKEN" ||
   error?.code === "ACCOUNT_BLOCKED" ||
-  error?.code === "USER_NOT_FOUND";
+  error?.code === "USER_NOT_FOUND" ||
+  error?.code === "LOGIN_REQUIRED";
 
 // Trả lỗi xác thực chat về client theo cấu trúc response thống nhất.
 const sendChatAuthError = (res, error) =>
@@ -184,10 +185,25 @@ const getActorFromRequest = async (req) => {
   };
 };
 
+const requireAuthenticatedChatActor = async (req) => {
+  const actor = await getActorFromRequest(req);
+
+  if (!actor?.user || actor.type !== "user") {
+    throw createChatAuthError(
+      401,
+      "LOGIN_REQUIRED",
+      "Vui lòng đăng nhập để nhắn tin với tư vấn viên."
+    );
+  }
+
+  return actor;
+};
+
 module.exports = {
   formatDateTime,
   getActorFromRequest,
   isChatAuthError,
   normalizeChatImageUrl,
+  requireAuthenticatedChatActor,
   sendChatAuthError,
 };

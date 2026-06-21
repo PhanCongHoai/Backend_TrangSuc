@@ -32,7 +32,7 @@ const saveBannerImage = (req, imageValue) => {
 
   fs.writeFileSync(filePath, fileBuffer);
 
-  return `${req.protocol}://${req.get("host")}/uploads/banners/${fileName}`;
+  return `/uploads/banners/${fileName}`;
 };
 
 // Chuẩn hóa danh sách ảnh banner đầu vào từ payload một ảnh hoặc nhiều ảnh.

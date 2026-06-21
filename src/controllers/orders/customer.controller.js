@@ -20,6 +20,7 @@ const {
   toPositiveIntegerOrNull,
 } = require("./shared");
 const { notifyOrderSubscribers } = require("./realtime");
+const { sendOrderCancelledEmail } = require("../../services/mail.service");
 
 const FALLBACK_PRODUCT_IMAGE =
   "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ1xp79XGKoIg-gZeZiRg2G7mpp2A6kH-AWow&s";
@@ -117,8 +118,10 @@ const createCustomerOrder = async (req, res) => {
 
     let ghnOrder = null;
     const ghnConfig = getPublicConfig();
+    const shippingMethod = String(req.body?.shipping_method || "ghn").trim().toLowerCase();
+    const isGhn = shippingMethod === "ghn";
 
-    if (ghnConfig.enabled && !isPrepaid) {
+    if (ghnConfig.enabled && !isPrepaid && isGhn) {
       ghnOrder = await createGhnOrder({
         ...req.body,
         name: orderTitle,
@@ -130,6 +133,27 @@ const createCustomerOrder = async (req, res) => {
     }
 
     const pool = await poolPromise;
+    const promotionId = toPositiveIntegerOrNull(req.body?.promotion_id);
+
+    if (promotionId !== null) {
+      const promoValidate = await pool
+        .request()
+        .input("UserId", sql.Int, userId)
+        .input("PromotionId", sql.Int, promotionId)
+        .query(`
+          SELECT 1 
+          FROM user_promotions 
+          WHERE user_id = @UserId AND promotion_id = @PromotionId AND is_used = 0 AND is_accepted = 1
+        `);
+
+      if (promoValidate.recordset.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Mã giảm giá không hợp lệ hoặc đã được sử dụng.",
+        });
+      }
+    }
+
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
@@ -137,6 +161,7 @@ const createCustomerOrder = async (req, res) => {
       const orderInsertResult = await new sql.Request(transaction)
         .input("UserId", sql.Int, userId)
         .input("SubTotal", sql.Decimal(15, 2), subtotal)
+        .input("PromotionId", sql.Int, promotionId)
         .input(
           "PromotionCode",
           sql.VarChar(50),
@@ -163,6 +188,7 @@ const createCustomerOrder = async (req, res) => {
           INSERT INTO orders (
             user_id,
             sub_total,
+            promotion_id,
             promotion_code,
             discount_amount,
             total_amount,
@@ -175,6 +201,7 @@ const createCustomerOrder = async (req, res) => {
           VALUES (
             @UserId,
             @SubTotal,
+            @PromotionId,
             @PromotionCode,
             @DiscountAmount,
             @TotalAmount,
@@ -295,6 +322,26 @@ const createCustomerOrder = async (req, res) => {
           .input("Status", sql.VarChar(50), "READY_TO_PICK").query(`
             INSERT INTO shipping_orders (order_id, carrier_name, tracking_code, status, updated_at)
             VALUES (@OrderId, @CarrierName, @TrackingCode, @Status, GETDATE())
+          `);
+      } else {
+        const carrierName = shippingMethod === "ghtk" ? "GHTK" : (shippingMethod === "viettelpost" ? "ViettelPost" : "Shop Delivery");
+        await new sql.Request(transaction)
+          .input("OrderId", sql.Int, orderId)
+          .input("CarrierName", sql.VarChar(100), carrierName)
+          .input("Status", sql.VarChar(50), "PENDING").query(`
+            INSERT INTO shipping_orders (order_id, carrier_name, tracking_code, status, updated_at)
+            VALUES (@OrderId, @CarrierName, NULL, @Status, GETDATE())
+          `);
+      }
+
+      if (promotionId !== null) {
+        await new sql.Request(transaction)
+          .input("UserId", sql.Int, userId)
+          .input("PromotionId", sql.Int, promotionId)
+          .query(`
+            UPDATE user_promotions
+            SET is_used = 1, used_at = GETDATE()
+            WHERE user_id = @UserId AND promotion_id = @PromotionId AND is_used = 0
           `);
       }
 
@@ -459,7 +506,8 @@ const getMyOrders = async (req, res) => {
       return {
         id: Number(order.id),
         title: buildOrderTitle(orderItems),
-        orderCode: order.tracking_code || order.shipping_code || null,
+        orderCode: buildInternalOrderCode(order.id),
+        shippingCode: order.tracking_code || order.shipping_code || null,
         subtotal: Number(order.sub_total || 0),
         discount: Number(order.discount_amount || 0),
         shippingFee,
@@ -487,9 +535,7 @@ const getMyOrders = async (req, res) => {
         address:
           shippingAddress?.fullAddress || shippingAddress?.streetAddress || "",
         note: shippingAddress?.note || "",
-        status: order.tracking_code
-          ? "Đã tạo đơn GHN"
-          : mapOrderStatus(order.status),
+        status: order.status,
         createdAt: order.created_at,
         items: orderItems,
       };
@@ -607,8 +653,134 @@ const getMyOrderPaymentStatus = async (req, res) => {
   }
 };
 
+const cancelCustomerOrder = async (req, res) => {
+  try {
+    const userId = Number(req.user?.id || 0);
+    const orderId = Number(req.params.id || 0);
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized.",
+      });
+    }
+
+    if (!orderId) {
+      return res.status(400).json({
+        success: false,
+        message: "Mã đơn hàng không hợp lệ.",
+      });
+    }
+
+    const pool = await poolPromise;
+    
+    const orderResult = await pool.request()
+      .input("OrderId", sql.Int, orderId)
+      .input("UserId", sql.Int, userId)
+      .query(`
+        SELECT TOP 1
+          o.id,
+          o.status,
+          o.payment_status,
+          o.total_amount,
+          u.email,
+          u.username,
+          ship.status AS shipping_status
+        FROM orders o
+        INNER JOIN users u ON u.id = o.user_id
+        LEFT JOIN shipping_orders ship ON ship.order_id = o.id
+        WHERE o.id = @OrderId AND o.user_id = @UserId
+      `);
+
+    const order = orderResult.recordset[0];
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Không tìm thấy đơn hàng.",
+      });
+    }
+
+    const currentStatus = String(order.status || "").trim().toUpperCase();
+    const shippingStatus = String(order.shipping_status || "").trim().toUpperCase();
+
+    if (["CANCELLED", "COMPLETED"].includes(currentStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `Đơn hàng ở trạng thái ${currentStatus === "CANCELLED" ? "Đã hủy" : "Hoàn tất"} không thể hủy.`,
+      });
+    }
+
+    if (shippingStatus && !["PENDING", "READY_TO_PICK"].includes(shippingStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: "Đơn hàng đã được bàn giao cho đơn vị vận chuyển, không thể hủy.",
+      });
+    }
+
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+      await new sql.Request(transaction)
+        .input("OrderId", sql.Int, orderId)
+        .query(`
+          UPDATE orders
+          SET status = 'CANCELLED'
+          WHERE id = @OrderId
+        `);
+
+      await new sql.Request(transaction)
+        .input("OrderId", sql.Int, orderId)
+        .query(`
+          UPDATE shipping_orders
+          SET status = 'CANCELLED', updated_at = GETDATE()
+          WHERE order_id = @OrderId
+        `);
+
+      await transaction.commit();
+
+      notifyOrderSubscribers({
+        orderId,
+        userId,
+        reason: "cancelled",
+        status: "CANCELLED",
+        paymentStatus: "CANCELLED",
+      });
+
+      const internalCode = buildInternalOrderCode(orderId);
+      const recipientEmail = order.email || order.username || "";
+      if (recipientEmail) {
+        sendOrderCancelledEmail({
+          to: recipientEmail,
+          displayName: order.username || "Khách hàng",
+          orderId,
+          internalCode,
+        }).catch((err) => {
+          console.error("Gửi email hủy đơn thất bại:", err);
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Hủy đơn hàng thành công.",
+      });
+    } catch (dbError) {
+      await transaction.rollback();
+      throw dbError;
+    }
+  } catch (error) {
+    console.error("Cancel customer order error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error.",
+    });
+  }
+};
+
 module.exports = {
   createCustomerOrder,
   getMyOrders,
   getMyOrderPaymentStatus,
+  cancelCustomerOrder,
 };

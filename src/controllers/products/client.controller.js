@@ -82,6 +82,8 @@ const getClientProducts = async (req, res) => {
         ON rate.material_type = p.material_type
         AND rate.rn = 1
       WHERE UPPER(ISNULL(p.status, '')) = 'ACTIVE'
+        AND ISNULL(c.is_hidden, 0) = 0
+        AND ISNULL(parent.is_hidden, 0) = 0
     `);
 
     let products = result.recordset.map((item) => {
@@ -104,8 +106,7 @@ const getClientProducts = async (req, res) => {
         stockQuantity: Number(item.total_quantity || 0),
         badge: buildBadge(item.status),
         image:
-          item.image_url ||
-          "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ1xp79XGKoIg-gZeZiRg2G7mpp2A6kH-AWow&s",
+          item.image_url || "",
         description: String(item.description || "").trim(),
       };
     });
@@ -243,6 +244,8 @@ const getFeaturedProducts = async (req, res) => {
         ON rate.material_type = p.material_type
         AND rate.rn = 1
       WHERE UPPER(ISNULL(p.status, '')) = 'ACTIVE'
+        AND ISNULL(c.is_hidden, 0) = 0
+        AND ISNULL(parent.is_hidden, 0) = 0
         AND ISNULL(inventory.total_quantity, 0) > 0
       ORDER BY p.created_at DESC, p.id DESC
     `);
@@ -267,8 +270,7 @@ const getFeaturedProducts = async (req, res) => {
         stockQuantity: Number(item.total_quantity || 0),
         badge: buildBadge(item.status),
         image:
-          item.image_url ||
-          "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ1xp79XGKoIg-gZeZiRg2G7mpp2A6kH-AWow&s",
+          item.image_url || "",
         description: String(item.description || "").trim(),
         pricing: {
           materialType: item.material_type,
@@ -333,8 +335,10 @@ const getProductDetail = async (req, res) => {
           p.created_at,
           c.name AS category_name,
           c.id AS category_id,
+          c.is_hidden AS category_is_hidden,
           parent.name AS parent_category_name,
           parent.id AS parent_category_id,
+          parent.is_hidden AS parent_category_is_hidden,
           pc.labor_cost,
           pc.stone_cost,
           pc.markup_rate,
@@ -360,7 +364,11 @@ const getProductDetail = async (req, res) => {
       });
     }
 
-    if (String(product.status || "").trim().toUpperCase() !== "ACTIVE") {
+    if (
+      String(product.status || "").trim().toUpperCase() !== "ACTIVE" ||
+      product.category_is_hidden === true ||
+      product.parent_category_is_hidden === true
+    ) {
       return res.status(404).json({
         success: false,
         message: "Product not found.",

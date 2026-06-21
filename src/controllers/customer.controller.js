@@ -1,4 +1,6 @@
 const { poolPromise, sql } = require("../config/db");
+const { sendAccountBlockedEmail, sendAccountUnblockedEmail } = require("../services/mail.service");
+
 
 const DEFAULT_BLOCK_REASON =
   "Tài khoản của bạn đã bị chặn. Vui lòng liên hệ quản trị viên để được hỗ trợ.";
@@ -167,7 +169,7 @@ const updateCustomerStatus = async (req, res) => {
           is_active = @IsActive,
           block_reason = CASE WHEN @IsActive = 1 THEN NULL ELSE @BlockReason END,
           blocked_at = CASE WHEN @IsActive = 1 THEN NULL ELSE GETDATE() END
-        OUTPUT INSERTED.id, INSERTED.is_active, INSERTED.block_reason, INSERTED.blocked_at
+        OUTPUT INSERTED.id, INSERTED.email, INSERTED.username, INSERTED.is_active, INSERTED.block_reason, INSERTED.blocked_at
         FROM users u
         LEFT JOIN roles r ON r.id = u.role_id
         WHERE u.id = @CustomerId
@@ -181,6 +183,46 @@ const updateCustomerStatus = async (req, res) => {
         success: false,
         message: "Customer not found.",
       });
+    }
+
+    // Gửi email thông báo chặn tài khoản nếu khách hàng bị khóa
+    if (!is_active) {
+      (async () => {
+        try {
+          // Lấy full name từ user_profiles
+          const profileResult = await pool.request()
+            .input("UserId", customerId)
+            .query(`SELECT full_name FROM user_profiles WHERE user_id = @UserId`);
+          const fullName = profileResult.recordset[0]?.full_name || updatedCustomer.username;
+
+          await sendAccountBlockedEmail({
+            to: updatedCustomer.email,
+            displayName: fullName,
+            blockReason: updatedCustomer.block_reason || DEFAULT_BLOCK_REASON,
+          });
+          console.log(`Successfully sent account blocked email to ${updatedCustomer.email}`);
+        } catch (mailError) {
+          console.error("Error sending account blocked email:", mailError);
+        }
+      })();
+    } else {
+      (async () => {
+        try {
+          // Lấy full name từ user_profiles
+          const profileResult = await pool.request()
+            .input("UserId", customerId)
+            .query(`SELECT full_name FROM user_profiles WHERE user_id = @UserId`);
+          const fullName = profileResult.recordset[0]?.full_name || updatedCustomer.username;
+
+          await sendAccountUnblockedEmail({
+            to: updatedCustomer.email,
+            displayName: fullName,
+          });
+          console.log(`Successfully sent account unblocked email to ${updatedCustomer.email}`);
+        } catch (mailError) {
+          console.error("Error sending account unblocked email:", mailError);
+        }
+      })();
     }
 
     return res.status(200).json({

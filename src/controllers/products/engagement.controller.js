@@ -96,6 +96,8 @@ const previewCompareProducts = async (req, res) => {
         LEFT JOIN inventory_summary inventory ON inventory.product_id = p.id
         WHERE p.id IN (@ProductId1, @ProductId2)
           AND UPPER(ISNULL(p.status, '')) = 'ACTIVE'
+          AND ISNULL(c.is_hidden, 0) = 0
+          AND ISNULL(parent.is_hidden, 0) = 0
       `);
 
     const productsById = new Map(
@@ -115,8 +117,7 @@ const previewCompareProducts = async (req, res) => {
             name: item.name,
             description: String(item.description || "").trim(),
             image:
-              item.image_url ||
-              "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQ1xp79XGKoIg-gZeZiRg2G7mpp2A6kH-AWow&s",
+              item.image_url || "",
             category: item.category_name || item.parent_category_name || "Trang suc",
             materialType: item.material_type || "",
             materialLabel: normalizeLabel(item.material_type),
@@ -134,9 +135,15 @@ const previewCompareProducts = async (req, res) => {
       .filter(Boolean);
 
     if (comparedProducts.length !== maxItems) {
+      const unavailableProductIds = normalizedIds.filter(
+        (productId) => !productsById.has(productId)
+      );
+
       return res.status(404).json({
         success: false,
         message: "Some products are unavailable for comparison.",
+        unavailableProductIds,
+        comparedProducts,
       });
     }
 
@@ -204,14 +211,21 @@ const createProductReview = async (req, res) => {
 
     const pool = await poolPromise;
     const productResult = await pool.request().input("ProductId", sql.Int, productId).query(`
-      SELECT TOP 1 id, status
-      FROM products
-      WHERE id = @ProductId
+      SELECT TOP 1 p.id, p.status, c.is_hidden AS category_is_hidden, parent.is_hidden AS parent_category_is_hidden
+      FROM products p
+      LEFT JOIN product_categories c ON c.id = p.category_id
+      LEFT JOIN product_categories parent ON parent.id = c.parent_id
+      WHERE p.id = @ProductId
     `);
 
     const product = productResult.recordset[0];
 
-    if (!product || String(product.status || "").trim().toUpperCase() !== "ACTIVE") {
+    if (
+      !product ||
+      String(product.status || "").trim().toUpperCase() !== "ACTIVE" ||
+      product.category_is_hidden === true ||
+      product.parent_category_is_hidden === true
+    ) {
       return res.status(404).json({
         success: false,
         message: "San pham khong ton tai hoac khong con hien thi.",

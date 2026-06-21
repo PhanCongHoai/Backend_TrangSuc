@@ -5,6 +5,29 @@ const {
 } = require("./realtime");
 const { formatDateTime, normalizeChatImageUrl } = require("./shared");
 
+// Hàm thử lại khi gặp lỗi deadlock của SQL Server (mã lỗi 1205).
+const withDeadlockRetry = async (fn, maxRetries = 3, delayMs = 100) => {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error) {
+      attempt++;
+      const isDeadlock =
+        error.number === 1205 ||
+        error.originalError?.info?.number === 1205 ||
+        String(error.message || "").toLowerCase().includes("deadlock");
+
+      if (isDeadlock && attempt <= maxRetries) {
+        console.warn(`[SQL Server Deadlock] Thử lại lần thứ ${attempt} sau ${delayMs * attempt}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+        continue;
+      }
+      throw error;
+    }
+  }
+};
+
 // Ánh xạ bản ghi chat_messages thành object message dùng chung trong API.
 const mapMessage = (item) => ({
   id: Number(item.id),
@@ -110,71 +133,81 @@ const createConversationForActor = async (actor) => {
 
 // Bảo đảm mỗi actor luôn có một hội thoại để đọc hoặc gửi tin nhắn.
 const ensureConversationForActor = async (actor) => {
-  let conversation = await getConversationByActor(actor);
+  return withDeadlockRetry(async () => {
+    let conversation = await getConversationByActor(actor);
 
-  if (!conversation) {
-    conversation = await createConversationForActor(actor);
-  }
+    if (!conversation) {
+      conversation = await createConversationForActor(actor);
+    }
 
-  return conversation;
+    return conversation;
+  });
 };
 
 // Lấy toàn bộ tin nhắn của một hội thoại theo thứ tự thời gian.
 const getConversationMessages = async (conversationId) => {
-  const pool = await poolPromise;
-  const result = await pool
-    .request()
-    .input("ConversationId", sql.Int, Number(conversationId))
-    .query(`
-      SELECT id, conversation_id, sender_type, sender_user_id, sender_name, message, image_url, created_at
-      FROM chat_messages
-      WHERE conversation_id = @ConversationId
-      ORDER BY created_at ASC, id ASC
-    `);
+  return withDeadlockRetry(async () => {
+    const pool = await poolPromise;
+    const result = await pool
+      .request()
+      .input("ConversationId", sql.Int, Number(conversationId))
+      .query(`
+        SELECT id, conversation_id, sender_type, sender_user_id, sender_name, message, image_url, created_at
+        FROM chat_messages
+        WHERE conversation_id = @ConversationId
+        ORDER BY created_at ASC, id ASC
+      `);
 
-  return result.recordset.map(mapMessage);
+    return result.recordset.map(mapMessage);
+  });
 };
 
 // Lấy summary của một hội thoại cụ thể theo id.
 const getConversationSummaryById = async (conversationId) => {
-  const pool = await poolPromise;
-  const result = await pool
-    .request()
-    .input("ConversationId", sql.Int, Number(conversationId))
-    .query(getConversationSummaryQuery("WHERE c.id = @ConversationId"));
+  return withDeadlockRetry(async () => {
+    const pool = await poolPromise;
+    const result = await pool
+      .request()
+      .input("ConversationId", sql.Int, Number(conversationId))
+      .query(getConversationSummaryQuery("WHERE c.id = @ConversationId"));
 
-  return result.recordset[0] ? mapConversationSummary(result.recordset[0]) : null;
+    return result.recordset[0] ? mapConversationSummary(result.recordset[0]) : null;
+  });
 };
 
 // Lấy danh sách summary hội thoại dành cho màn hình admin.
 const getAdminConversationSummaries = async () => {
-  const pool = await poolPromise;
-  const result = await pool
-    .request()
-    .query(
-      `${getConversationSummaryQuery("")} ORDER BY c.last_message_at DESC, c.id DESC`
-    );
+  return withDeadlockRetry(async () => {
+    const pool = await poolPromise;
+    const result = await pool
+      .request()
+      .query(
+        `${getConversationSummaryQuery("")} ORDER BY c.last_message_at DESC, c.id DESC`
+      );
 
-  return result.recordset.map(mapConversationSummary);
+    return result.recordset.map(mapConversationSummary);
+  });
 };
 
 // Cập nhật metadata thời gian hoạt động cuối của một hội thoại.
 const refreshConversationMeta = async (conversationId) => {
-  const pool = await poolPromise;
-  await pool.request().input("ConversationId", sql.Int, Number(conversationId)).query(`
-    UPDATE c
-    SET
-      updated_at = GETDATE(),
-      last_message_at = ISNULL(latest.created_at, c.created_at)
-    FROM chat_conversations c
-    OUTER APPLY (
-      SELECT TOP 1 created_at
-      FROM chat_messages
-      WHERE conversation_id = c.id
-      ORDER BY created_at DESC, id DESC
-    ) latest
-    WHERE c.id = @ConversationId
-  `);
+  return withDeadlockRetry(async () => {
+    const pool = await poolPromise;
+    await pool.request().input("ConversationId", sql.Int, Number(conversationId)).query(`
+      UPDATE c
+      SET
+        updated_at = GETDATE(),
+        last_message_at = ISNULL(latest.created_at, c.created_at)
+      FROM chat_conversations c
+      OUTER APPLY (
+        SELECT TOP 1 created_at
+        FROM chat_messages
+        WHERE conversation_id = c.id
+        ORDER BY created_at DESC, id DESC
+      ) latest
+      WHERE c.id = @ConversationId
+    `);
+  });
 };
 
 // Gửi một tin nhắn mới vào hội thoại, đồng thời phát sự kiện realtime.
@@ -197,184 +230,194 @@ const postMessageToConversation = async ({
     throw new Error("Vui lòng nhập nội dung tin nhắn hoặc chọn ảnh.");
   }
 
-  const pool = await poolPromise;
-  const senderType =
-    actor.type === "user"
-      ? String(actor.user.role || "").toLowerCase() === "admin"
-        ? "admin"
-        : "user"
-      : "guest";
-  const senderName =
-    senderType === "admin"
-      ? actor.user.fullName ||
-        actor.user.username ||
-        actor.user.email ||
-        "Tư vấn viên"
-      : actor.guestName;
+  return withDeadlockRetry(async () => {
+    const pool = await poolPromise;
+    const senderType =
+      actor.type === "user"
+        ? String(actor.user.role || "").toLowerCase() === "admin"
+          ? "admin"
+          : "user"
+        : "guest";
+    const senderName =
+      senderType === "admin"
+        ? actor.user.fullName ||
+          actor.user.username ||
+          actor.user.email ||
+          "Tư vấn viên"
+        : actor.guestName;
 
-  const result = await pool
-    .request()
-    .input("ConversationId", sql.Int, Number(conversationId))
-    .input("SenderType", sql.VarChar(20), senderType)
-    .input("SenderUserId", sql.Int, actor.user?.id || null)
-    .input("SenderName", sql.NVarChar(120), senderName)
-    .input("Message", sql.NVarChar(sql.MAX), normalizedMessage)
-    .input("ImageUrl", sql.NVarChar(sql.MAX), normalizedImageUrl)
-    .query(`
-      INSERT INTO chat_messages (conversation_id, sender_type, sender_user_id, sender_name, message, image_url)
-      OUTPUT INSERTED.id, INSERTED.conversation_id, INSERTED.sender_type, INSERTED.sender_user_id,
-             INSERTED.sender_name, INSERTED.message, INSERTED.image_url, INSERTED.created_at
-      VALUES (@ConversationId, @SenderType, @SenderUserId, @SenderName, @Message, @ImageUrl);
+    const result = await pool
+      .request()
+      .input("ConversationId", sql.Int, Number(conversationId))
+      .input("SenderType", sql.VarChar(20), senderType)
+      .input("SenderUserId", sql.Int, actor.user?.id || null)
+      .input("SenderName", sql.NVarChar(120), senderName)
+      .input("Message", sql.NVarChar(sql.MAX), normalizedMessage)
+      .input("ImageUrl", sql.NVarChar(sql.MAX), normalizedImageUrl)
+      .query(`
+        INSERT INTO chat_messages (conversation_id, sender_type, sender_user_id, sender_name, message, image_url)
+        OUTPUT INSERTED.id, INSERTED.conversation_id, INSERTED.sender_type, INSERTED.sender_user_id,
+               INSERTED.sender_name, INSERTED.message, INSERTED.image_url, INSERTED.created_at
+        VALUES (@ConversationId, @SenderType, @SenderUserId, @SenderName, @Message, @ImageUrl);
 
-      UPDATE chat_conversations
-      SET
-        updated_at = GETDATE(),
-        last_message_at = GETDATE(),
-        admin_seen_at = CASE
-          WHEN @SenderType = 'admin' THEN GETDATE()
-          ELSE admin_seen_at
-        END
-      WHERE id = @ConversationId;
-    `);
+        UPDATE chat_conversations
+        SET
+          updated_at = GETDATE(),
+          last_message_at = GETDATE(),
+          admin_seen_at = CASE
+            WHEN @SenderType = 'admin' THEN GETDATE()
+            ELSE admin_seen_at
+          END
+        WHERE id = @ConversationId;
+      `);
 
-  const savedMessage = mapMessage(result.recordset[0]);
-  const [messages, conversationSummary] = await Promise.all([
-    getConversationMessages(conversationId),
-    getConversationSummaryById(conversationId),
-  ]);
+    const savedMessage = mapMessage(result.recordset[0]);
+    const [messages, conversationSummary] = await Promise.all([
+      getConversationMessages(conversationId),
+      getConversationSummaryById(conversationId),
+    ]);
 
-  notifyConversationSubscribers(conversationId, {
-    conversationId: Number(conversationId),
-    message: savedMessage,
-    messages,
+    notifyConversationSubscribers(conversationId, {
+      conversationId: Number(conversationId),
+      message: savedMessage,
+      messages,
+    });
+    notifyAdminSubscribers({
+      conversation: conversationSummary,
+      message: savedMessage,
+    });
+
+    return savedMessage;
   });
-  notifyAdminSubscribers({
-    conversation: conversationSummary,
-    message: savedMessage,
-  });
-
-  return savedMessage;
 };
 
 // Xóa tin nhắn do chính actor hiện tại tạo ra và phát cập nhật realtime.
 const deleteMyMessageByActor = async ({ actor, messageId }) => {
-  const conversation = await ensureConversationForActor(actor);
-  const pool = await poolPromise;
-  const result = await pool
-    .request()
-    .input("MessageId", sql.Int, Number(messageId))
-    .input("ConversationId", sql.Int, Number(conversation.id))
-    .input("SenderUserId", sql.Int, actor.user?.id || null)
-    .input("SenderType", sql.VarChar(20), actor.type === "user" ? "user" : "guest")
-    .query(`
-      DELETE FROM chat_messages
-      OUTPUT DELETED.conversation_id
-      WHERE id = @MessageId
-        AND conversation_id = @ConversationId
-        AND (
-          (sender_type = 'guest' AND @SenderType = 'guest')
-          OR (sender_type = 'user' AND sender_user_id = @SenderUserId AND @SenderType = 'user')
-        )
-    `);
+  return withDeadlockRetry(async () => {
+    const conversation = await ensureConversationForActor(actor);
+    const pool = await poolPromise;
+    const result = await pool
+      .request()
+      .input("MessageId", sql.Int, Number(messageId))
+      .input("ConversationId", sql.Int, Number(conversation.id))
+      .input("SenderUserId", sql.Int, actor.user?.id || null)
+      .input("SenderType", sql.VarChar(20), actor.type === "user" ? "user" : "guest")
+      .query(`
+        DELETE FROM chat_messages
+        OUTPUT DELETED.conversation_id
+        WHERE id = @MessageId
+          AND conversation_id = @ConversationId
+          AND (
+            (sender_type = 'guest' AND @SenderType = 'guest')
+            OR (sender_type = 'user' AND sender_user_id = @SenderUserId AND @SenderType = 'user')
+          )
+      `);
 
-  if (!result.recordset[0]) {
-    return null;
-  }
+    if (!result.recordset[0]) {
+      return null;
+    }
 
-  await refreshConversationMeta(conversation.id);
-  const [messages, conversationSummary] = await Promise.all([
-    getConversationMessages(conversation.id),
-    getConversationSummaryById(conversation.id),
-  ]);
+    await refreshConversationMeta(conversation.id);
+    const [messages, conversationSummary] = await Promise.all([
+      getConversationMessages(conversation.id),
+      getConversationSummaryById(conversation.id),
+    ]);
 
-  notifyConversationSubscribers(conversation.id, {
-    conversationId: Number(conversation.id),
-    deletedMessageId: Number(messageId),
-    messages,
+    notifyConversationSubscribers(conversation.id, {
+      conversationId: Number(conversation.id),
+      deletedMessageId: Number(messageId),
+      messages,
+    });
+    notifyAdminSubscribers({
+      conversation: conversationSummary,
+      deletedMessageId: Number(messageId),
+    });
+
+    return {
+      conversationId: Number(conversation.id),
+    };
   });
-  notifyAdminSubscribers({
-    conversation: conversationSummary,
-    deletedMessageId: Number(messageId),
-  });
-
-  return {
-    conversationId: Number(conversation.id),
-  };
 };
 
 // Đánh dấu một hội thoại là đã được admin xem đến thời điểm hiện tại.
 const markConversationSeenByAdmin = async (conversationId) => {
-  const pool = await poolPromise;
-  await pool.request().input("ConversationId", sql.Int, Number(conversationId)).query(`
-    UPDATE chat_conversations
-    SET admin_seen_at = GETDATE()
-    WHERE id = @ConversationId
-  `);
+  return withDeadlockRetry(async () => {
+    const pool = await poolPromise;
+    await pool.request().input("ConversationId", sql.Int, Number(conversationId)).query(`
+      UPDATE chat_conversations
+      SET admin_seen_at = GETDATE()
+      WHERE id = @ConversationId
+    `);
+  });
 };
 
 // Xóa tin nhắn bất kỳ trong hội thoại từ phía admin và đồng bộ realtime.
 const deleteAdminMessageById = async ({ conversationId, messageId }) => {
-  const pool = await poolPromise;
-  const result = await pool
-    .request()
-    .input("ConversationId", sql.Int, Number(conversationId))
-    .input("MessageId", sql.Int, Number(messageId))
-    .query(`
-      DELETE FROM chat_messages
-      OUTPUT DELETED.conversation_id
-      WHERE id = @MessageId
-        AND conversation_id = @ConversationId
-    `);
+  return withDeadlockRetry(async () => {
+    const pool = await poolPromise;
+    const result = await pool
+      .request()
+      .input("ConversationId", sql.Int, Number(conversationId))
+      .input("MessageId", sql.Int, Number(messageId))
+      .query(`
+        DELETE FROM chat_messages
+        OUTPUT DELETED.conversation_id
+        WHERE id = @MessageId
+          AND conversation_id = @ConversationId
+      `);
 
-  if (!result.recordset[0]) {
-    return false;
-  }
+    if (!result.recordset[0]) {
+      return false;
+    }
 
-  await refreshConversationMeta(conversationId);
-  const [messages, conversationSummary] = await Promise.all([
-    getConversationMessages(conversationId),
-    getConversationSummaryById(conversationId),
-  ]);
+    await refreshConversationMeta(conversationId);
+    const [messages, conversationSummary] = await Promise.all([
+      getConversationMessages(conversationId),
+      getConversationSummaryById(conversationId),
+    ]);
 
-  notifyConversationSubscribers(conversationId, {
-    conversationId: Number(conversationId),
-    deletedMessageId: Number(messageId),
-    messages,
+    notifyConversationSubscribers(conversationId, {
+      conversationId: Number(conversationId),
+      deletedMessageId: Number(messageId),
+      messages,
+    });
+    notifyAdminSubscribers({
+      conversation: conversationSummary,
+      deletedMessageId: Number(messageId),
+    });
+
+    return true;
   });
-  notifyAdminSubscribers({
-    conversation: conversationSummary,
-    deletedMessageId: Number(messageId),
-  });
-
-  return true;
 };
 
 // Xóa toàn bộ hội thoại từ phía admin và phát sự kiện cho các subscriber.
 const deleteAdminConversationById = async (conversationId) => {
-  const pool = await poolPromise;
-  const result = await pool
-    .request()
-    .input("ConversationId", sql.Int, Number(conversationId))
-    .query(`
-      DELETE FROM chat_conversations
-      OUTPUT DELETED.id
-      WHERE id = @ConversationId
-    `);
+  return withDeadlockRetry(async () => {
+    const pool = await poolPromise;
+    const result = await pool
+      .request()
+      .input("ConversationId", sql.Int, Number(conversationId))
+      .query(`
+        DELETE FROM chat_conversations
+        OUTPUT DELETED.id
+        WHERE id = @ConversationId
+      `);
 
-  if (!result.recordset[0]) {
-    return false;
-  }
+    if (!result.recordset[0]) {
+      return false;
+    }
 
-  notifyConversationSubscribers(conversationId, {
-    conversationId: Number(conversationId),
-    deletedConversationId: Number(conversationId),
-    messages: [],
+    notifyConversationSubscribers(conversationId, {
+      conversationId: Number(conversationId),
+      deletedConversationId: Number(conversationId),
+      messages: [],
+    });
+    notifyAdminSubscribers({
+      deletedConversationId: Number(conversationId),
+    });
+
+    return true;
   });
-  notifyAdminSubscribers({
-    deletedConversationId: Number(conversationId),
-  });
-
-  return true;
 };
 
 module.exports = {

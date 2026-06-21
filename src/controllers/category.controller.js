@@ -1,23 +1,45 @@
 const { poolPromise } = require("../config/db");
 const { sql } = require("../config/db");
 
-// Lấy toàn bộ danh mục sản phẩm kèm thông tin danh mục cha nếu có.
+const ensureCategorySchema = async (pool) => {
+  await pool.request().query(`
+    IF COL_LENGTH('dbo.product_categories', 'is_hidden') IS NULL
+    BEGIN
+      ALTER TABLE dbo.product_categories
+      ADD is_hidden BIT NOT NULL CONSTRAINT DF_product_categories_is_hidden DEFAULT 0;
+    END;
+  `);
+};
+
+// Lấy danh mục sản phẩm kèm thông tin danh mục cha nếu có (hỗ trợ lọc ẩn/hiện).
 const getCategories = async (req, res) => {
   try {
+    const showAll = req.query.all === "true";
     const pool = await poolPromise;
+    await ensureCategorySchema(pool);
 
-    const result = await pool.request().query(`
+    let queryStr = `
       SELECT
         c.id,
         c.name,
         c.parent_id,
+        c.is_hidden,
         p.name AS parent_name
       FROM product_categories c
       LEFT JOIN product_categories p ON p.id = c.parent_id
+    `;
+
+    if (!showAll) {
+      queryStr += ` WHERE ISNULL(c.is_hidden, 0) = 0 `;
+    }
+
+    queryStr += `
       ORDER BY
         CASE WHEN c.parent_id IS NULL THEN 0 ELSE 1 END,
         c.id
-    `);
+    `;
+
+    const result = await pool.request().query(queryStr);
 
     return res.status(200).json({
       success: true,
@@ -194,4 +216,94 @@ const deleteCategory = async (req, res) => {
   }
 };
 
-module.exports = { getCategories, createCategory, deleteCategory };
+// Thay đổi trạng thái ẩn/hiện danh mục và các sản phẩm thuộc danh mục đó.
+const toggleCategoryVisibility = async (req, res) => {
+  try {
+    const categoryId = Number(req.params.id);
+    const { is_hidden } = req.body;
+
+    if (Number.isNaN(categoryId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Mã danh mục không hợp lệ.",
+      });
+    }
+
+    if (typeof is_hidden !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        message: "Trạng thái ẩn/hiện phải là boolean.",
+      });
+    }
+
+    const pool = await poolPromise;
+    await ensureCategorySchema(pool);
+
+    const categoryResult = await pool
+      .request()
+      .input("CategoryId", sql.Int, categoryId)
+      .query(`
+        SELECT id, name, parent_id
+        FROM product_categories
+        WHERE id = @CategoryId
+      `);
+
+    const category = categoryResult.recordset[0];
+
+    if (!category) {
+      return res.status(404).json({
+        success: false,
+        message: "Không tìm thấy danh mục.",
+      });
+    }
+
+    const isHiddenVal = is_hidden ? 1 : 0;
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+      // 1. Cập nhật danh mục được chọn
+      await new sql.Request(transaction)
+        .input("CategoryId", sql.Int, categoryId)
+        .input("IsHidden", sql.Bit, isHiddenVal)
+        .query(`
+          UPDATE product_categories
+          SET is_hidden = @IsHidden
+          WHERE id = @CategoryId
+        `);
+
+      // 2. Nếu là danh mục cha (parent_id là null), xử lý toàn bộ danh mục con
+      if (category.parent_id === null) {
+        // Cập nhật trạng thái ẩn/hiện của tất cả danh mục con
+        await new sql.Request(transaction)
+          .input("ParentId", sql.Int, categoryId)
+          .input("IsHidden", sql.Bit, isHiddenVal)
+          .query(`
+            UPDATE product_categories
+            SET is_hidden = @IsHidden
+            WHERE parent_id = @ParentId
+          `);
+      }
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        success: true,
+        message: is_hidden
+          ? "Đã ẩn danh mục thành công (các sản phẩm thuộc danh mục này sẽ tạm thời bị ẩn)."
+          : "Đã hiển thị danh mục thành công.",
+      });
+    } catch (txError) {
+      await transaction.rollback();
+      throw txError;
+    }
+  } catch (error) {
+    console.error("Toggle category visibility error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Lỗi hệ thống.",
+    });
+  }
+};
+
+module.exports = { getCategories, createCategory, deleteCategory, toggleCategoryVisibility };

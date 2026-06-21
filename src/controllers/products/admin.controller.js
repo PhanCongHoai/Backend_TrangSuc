@@ -11,8 +11,26 @@ const {
   retireMissingProductVariants,
   saveProductImage,
   upsertProductVariants,
+  validatePriceTiers,
   validateVariantSkusAvailable,
 } = require("./shared");
+
+const formatDeleteProductErrorMessage = (error) => {
+  const sqlMessage = String(error?.originalError?.info?.message || error?.message || "").trim();
+
+  if (
+    Number(error?.number) === 547 ||
+    /reference constraint|conflicted with the reference constraint/i.test(sqlMessage)
+  ) {
+    return "Sản phẩm đang còn dữ liệu liên kết nên chưa thể xóa. Hãy ẩn sản phẩm thay vì xóa.";
+  }
+
+  if (/invalid object name ['"]?product_price_tiers['"]?/i.test(sqlMessage)) {
+    return "Cấu trúc dữ liệu giá số lượng chưa được đồng bộ. Vui lòng tải lại trang và thử xóa lại.";
+  }
+
+  return "Không thể xóa sản phẩm lúc này. Vui lòng thử lại sau.";
+};
 
 // Lấy toàn bộ dữ liệu sản phẩm phục vụ màn hình quản trị.
 const getAdminProducts = async (req, res) => {
@@ -132,12 +150,27 @@ const createAdminProduct = async (req, res) => {
     warehouse_location,
   } = req.body;
 
+  if (String(main_image_url || "").trim().startsWith("data:image/")) {
+    return res.status(400).json({
+      success: false,
+      message: "Tải ảnh từ máy tính (local) không được phép. Vui lòng cung cấp địa chỉ URL ảnh công khai.",
+    });
+  }
+
   if (!String(name || "").trim()) {
     return res.status(400).json({ success: false, message: "Product name is required." });
   }
 
   if (!String(material_type || "").trim()) {
     return res.status(400).json({ success: false, message: "material_type is required." });
+  }
+
+  const tierValidationError = validatePriceTiers(price_tiers || req.body?.priceTiers);
+  if (tierValidationError) {
+    return res.status(400).json({
+      success: false,
+      message: tierValidationError,
+    });
   }
 
   const invalidNumericFields = findInvalidNumericProductFields({
@@ -353,12 +386,27 @@ const updateAdminProduct = async (req, res) => {
     });
   }
 
+  if (String(main_image_url || "").trim().startsWith("data:image/")) {
+    return res.status(400).json({
+      success: false,
+      message: "Tải ảnh từ máy tính (local) không được phép. Vui lòng cung cấp địa chỉ URL ảnh công khai.",
+    });
+  }
+
   if (!String(name || "").trim()) {
     return res.status(400).json({ success: false, message: "Product name is required." });
   }
 
   if (!String(material_type || "").trim()) {
     return res.status(400).json({ success: false, message: "material_type is required." });
+  }
+
+  const tierValidationError = validatePriceTiers(price_tiers || req.body?.priceTiers);
+  if (tierValidationError) {
+    return res.status(400).json({
+      success: false,
+      message: tierValidationError,
+    });
   }
 
   const invalidNumericFields = findInvalidNumericProductFields({
@@ -615,6 +663,7 @@ const deleteAdminProduct = async (req, res) => {
 
   try {
     const pool = await poolPromise;
+    await ensureProductPriceTiersSchema(pool);
     const variantIdsResult = await pool.request().input("ProductId", sql.Int, productId).query(`
       SELECT id
       FROM product_variants
@@ -634,26 +683,7 @@ const deleteAdminProduct = async (req, res) => {
         ).recordset.length > 0
       : false;
 
-    const hasInventoryHistory = variantIds.length
-      ? (
-          await pool.request().input("ProductId", sql.Int, productId).query(`
-            SELECT TOP 1 ledger.id
-            FROM inventory_ledgers ledger
-            INNER JOIN product_variants pv ON pv.id = ledger.variant_id
-            WHERE pv.product_id = @ProductId
-            UNION ALL
-            SELECT TOP 1 detail.id
-            FROM inventory_voucher_details detail
-            INNER JOIN product_variants pv ON pv.id = detail.variant_id
-            WHERE pv.product_id = @ProductId
-            UNION ALL
-            SELECT TOP 1 reserve.id
-            FROM inventory_reservations reserve
-            INNER JOIN product_variants pv ON pv.id = reserve.variant_id
-            WHERE pv.product_id = @ProductId
-          `)
-        ).recordset.length > 0
-      : false;
+    const hasInventoryHistory = false;
 
     if (hasOrderItems || hasInventoryHistory) {
       return res.status(409).json({
@@ -668,11 +698,10 @@ const deleteAdminProduct = async (req, res) => {
     await new sql.Request(transaction)
       .input("ProductId", sql.Int, productId)
       .query(`
-        DELETE FROM reporting_top_products WHERE product_id = @ProductId;
-        DELETE FROM comparison_items WHERE product_id = @ProductId;
         DELETE FROM reviews WHERE product_id = @ProductId;
         DELETE FROM product_certificates WHERE product_id = @ProductId;
         DELETE FROM product_images WHERE product_id = @ProductId;
+        DELETE FROM product_price_tiers WHERE product_id = @ProductId;
         DELETE FROM product_pricing_configs WHERE product_id = @ProductId;
         DELETE cart_items
         FROM cart_items
@@ -703,7 +732,7 @@ const deleteAdminProduct = async (req, res) => {
     console.error("Delete admin product error:", error);
     return res.status(500).json({
       success: false,
-      message: "Server error.",
+      message: formatDeleteProductErrorMessage(error),
     });
   }
 };
@@ -714,6 +743,7 @@ const deleteAllAdminProducts = async (req, res) => {
 
   try {
     const pool = await poolPromise;
+    await ensureProductPriceTiersSchema(pool);
 
     const productsCountResult = await pool.request().query(`
       SELECT COUNT(1) AS total_products
@@ -738,22 +768,7 @@ const deleteAllAdminProducts = async (req, res) => {
         `)
       ).recordset.length > 0;
 
-    const hasInventoryHistory =
-      (
-        await pool.request().query(`
-          SELECT TOP 1 ledger.id
-          FROM inventory_ledgers ledger
-          INNER JOIN product_variants pv ON pv.id = ledger.variant_id
-          UNION ALL
-          SELECT TOP 1 detail.id
-          FROM inventory_voucher_details detail
-          INNER JOIN product_variants pv ON pv.id = detail.variant_id
-          UNION ALL
-          SELECT TOP 1 reserve.id
-          FROM inventory_reservations reserve
-          INNER JOIN product_variants pv ON pv.id = reserve.variant_id
-        `)
-      ).recordset.length > 0;
+    const hasInventoryHistory = false;
 
     if (hasOrderItems || hasInventoryHistory) {
       return res.status(409).json({
@@ -766,8 +781,6 @@ const deleteAllAdminProducts = async (req, res) => {
     await transaction.begin();
 
     await new sql.Request(transaction).query(`
-      DELETE FROM reporting_top_products;
-      DELETE FROM comparison_items;
       DELETE FROM reviews;
       DELETE FROM product_certificates;
       DELETE FROM product_images;

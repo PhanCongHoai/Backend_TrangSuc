@@ -13,6 +13,7 @@ const {
 } = require("../controllers/chat.controller");
 const {
   authenticateAccessToken,
+  authenticateAccessTokenFlexible,
   authorizeRoles,
 } = require("../middlewares/auth.middleware");
 
@@ -33,7 +34,7 @@ router.get(
 );
 router.get(
   "/admin/conversations/stream",
-  authenticateAccessToken,
+  authenticateAccessTokenFlexible,
   authorizeRoles("admin"),
   streamAdminConversations
 );

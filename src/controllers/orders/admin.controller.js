@@ -13,6 +13,16 @@ const {
 } = require("./shared");
 const { notifyOrderSubscribers } = require("./realtime");
 
+const resolveDashboardLowStockThreshold = () => {
+  const threshold = Number(process.env.DASHBOARD_LOW_STOCK_THRESHOLD || 5);
+
+  if (!Number.isFinite(threshold)) {
+    return 5;
+  }
+
+  return Math.max(1, Math.floor(threshold));
+};
+
 // Chuẩn hóa trạng thái đơn hàng admin về tập giá trị backend cho phép.
 const normalizeAdminOrderStatus = (value) => {
   const status = String(value || "").trim().toUpperCase();
@@ -241,6 +251,84 @@ const getAdminRevenueReport = async (req, res) => {
   }
 };
 
+// Lấy 4 chỉ số thật cho trang bảng điều khiển quản trị trong ngày hiện tại.
+const getAdminDashboardSummary = async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const lowStockThreshold = resolveDashboardLowStockThreshold();
+    const result = await pool
+      .request()
+      .input("LowStockThreshold", sql.Int, lowStockThreshold)
+      .query(`
+        DECLARE @Today DATE = CAST(GETDATE() AS DATE);
+        DECLARE @Tomorrow DATE = DATEADD(DAY, 1, @Today);
+
+        ;WITH low_stock_products AS (
+          SELECT
+            p.id,
+            SUM(ISNULL(stock.quantity, 0)) AS total_stock
+          FROM products p
+          INNER JOIN product_variants pv ON pv.product_id = p.id
+          LEFT JOIN inventory_stocks stock ON stock.variant_id = pv.id
+          WHERE UPPER(ISNULL(p.status, 'ACTIVE')) = 'ACTIVE'
+          GROUP BY p.id
+        )
+        SELECT
+          (
+            SELECT COUNT(1)
+            FROM orders o
+            WHERE o.created_at >= @Today
+              AND o.created_at < @Tomorrow
+          ) AS today_orders,
+          (
+            SELECT ISNULL(SUM(CASE WHEN UPPER(ISNULL(o.status, '')) <> 'CANCELLED' THEN o.total_amount ELSE 0 END), 0)
+            FROM orders o
+            WHERE o.created_at >= @Today
+              AND o.created_at < @Tomorrow
+          ) AS today_revenue,
+          (
+            SELECT COUNT(1)
+            FROM users u
+            LEFT JOIN roles r ON r.id = u.role_id
+            WHERE u.created_at >= @Today
+              AND u.created_at < @Tomorrow
+              AND (r.role_name = 'customer' OR r.role_name IS NULL)
+          ) AS today_new_customers,
+          (
+            SELECT COUNT(1)
+            FROM low_stock_products lsp
+            WHERE lsp.total_stock > 0
+              AND lsp.total_stock <= @LowStockThreshold
+          ) AS low_stock_products
+      `);
+
+    const summary = result.recordset[0] || {};
+
+    return res.status(200).json({
+      success: true,
+      summary: {
+        todayOrders: Number(summary.today_orders || 0),
+        todayRevenue: Number(summary.today_revenue || 0),
+        todayNewCustomers: Number(summary.today_new_customers || 0),
+        lowStockProducts: Number(summary.low_stock_products || 0),
+        lowStockThreshold,
+      },
+      stats: [
+        { label: "Đơn hàng trong ngày", value: String(Number(summary.today_orders || 0)) },
+        { label: "Doanh thu trong ngày", value: formatCurrency(summary.today_revenue || 0) },
+        { label: "Khách hàng mới đăng ký", value: String(Number(summary.today_new_customers || 0)) },
+        { label: "Sản phẩm sắp hết", value: String(Number(summary.low_stock_products || 0)) },
+      ],
+    });
+  } catch (error) {
+    console.error("Get admin dashboard summary error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Không thể tải dữ liệu bảng điều khiển.",
+    });
+  }
+};
+
 // Lấy toàn bộ đơn hàng kèm danh sách sản phẩm và thông tin thanh toán cho admin.
 const getAdminOrders = async (req, res) => {
   try {
@@ -369,7 +457,7 @@ const updateAdminOrderStatus = async (req, res) => {
       .input(
         "PaymentStatus",
         sql.VarChar(50),
-        nextStatus === "COMPLETED" ? "PAID" : nextStatus === "CANCELLED" ? "CANCELLED" : null,
+        nextStatus === "COMPLETED" ? "PAID" : null,
       )
       .query(`
         UPDATE orders
@@ -408,13 +496,31 @@ const updateAdminOrderStatus = async (req, res) => {
         `);
     }
 
-    if (nextStatus === "COMPLETED" || nextStatus === "CANCELLED") {
+    if (nextStatus === "COMPLETED") {
       await new sql.Request(transaction)
         .input("OrderId", sql.Int, orderId)
         .input("PaymentStatus", sql.VarChar(50), updatedOrder.payment_status)
         .query(`
           UPDATE order_payments
           SET status = @PaymentStatus
+          WHERE order_id = @OrderId
+        `);
+
+      await new sql.Request(transaction)
+        .input("OrderId", sql.Int, orderId)
+        .query(`
+          UPDATE shipping_orders
+          SET status = 'DELIVERED', updated_at = GETDATE()
+          WHERE order_id = @OrderId
+        `);
+    }
+
+    if (nextStatus === "CANCELLED") {
+      await new sql.Request(transaction)
+        .input("OrderId", sql.Int, orderId)
+        .query(`
+          UPDATE shipping_orders
+          SET status = 'CANCELLED', updated_at = GETDATE()
           WHERE order_id = @OrderId
         `);
     }
@@ -455,6 +561,7 @@ const updateAdminOrderStatus = async (req, res) => {
 };
 
 module.exports = {
+  getAdminDashboardSummary,
   getAdminOrders,
   getAdminRevenueReport,
   updateAdminOrderStatus,

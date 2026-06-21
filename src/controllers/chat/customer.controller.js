@@ -10,8 +10,8 @@ const {
   postMessageToConversation,
 } = require("./service");
 const {
-  getActorFromRequest,
   isChatAuthError,
+  requireAuthenticatedChatActor,
   sendChatAuthError,
 } = require("./shared");
 
@@ -19,7 +19,7 @@ const {
 const deleteMyMessage = async (req, res) => {
   try {
     await ensureChatSchema();
-    const actor = await getActorFromRequest(req);
+    const actor = await requireAuthenticatedChatActor(req);
     const messageId = Number(req.params.messageId);
 
     if (!actor || Number.isNaN(messageId) || messageId <= 0) {
@@ -60,7 +60,7 @@ const deleteMyMessage = async (req, res) => {
 const getMyConversation = async (req, res) => {
   try {
     await ensureChatSchema();
-    const actor = await getActorFromRequest(req);
+    const actor = await requireAuthenticatedChatActor(req);
 
     if (!actor) {
       return res.status(400).json({
@@ -98,7 +98,7 @@ const getMyConversation = async (req, res) => {
 const sendMyMessage = async (req, res) => {
   try {
     await ensureChatSchema();
-    const actor = await getActorFromRequest(req);
+    const actor = await requireAuthenticatedChatActor(req);
 
     if (!actor) {
       return res.status(400).json({
@@ -141,7 +141,7 @@ const sendMyMessage = async (req, res) => {
 const streamMyConversation = async (req, res) => {
   try {
     await ensureChatSchema();
-    const actor = await getActorFromRequest(req);
+    const actor = await requireAuthenticatedChatActor(req);
 
     if (!actor) {
       return res.status(400).end();

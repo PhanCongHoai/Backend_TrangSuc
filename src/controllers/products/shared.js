@@ -128,6 +128,66 @@ const normalizePriceTierInputs = (priceTiers = []) => {
     .sort((left, right) => left.minQuantity - right.minQuantity);
 };
 
+// Kiểm tra tính hợp lệ và chồng chéo của các bậc số lượng.
+// Trả về chuỗi thông báo lỗi nếu có lỗi, ngược lại trả về null (hợp lệ).
+const validatePriceTiers = (priceTiers = []) => {
+  if (!Array.isArray(priceTiers) || priceTiers.length === 0) {
+    return null;
+  }
+
+  const normalized = [];
+
+  for (let i = 0; i < priceTiers.length; i++) {
+    const tier = priceTiers[i];
+
+    const rawMin = tier?.min_quantity ?? tier?.minQuantity;
+    const rawMax = tier?.max_quantity ?? tier?.maxQuantity;
+    const rawRate = tier?.markup_rate ?? tier?.markupRate;
+
+    const minQty = rawMin === "" || rawMin === null || rawMin === undefined ? NaN : Number(rawMin);
+    const maxQty = rawMax === "" || rawMax === null || rawMax === undefined ? null : Number(rawMax);
+    const markupRate = rawRate === "" || rawRate === null || rawRate === undefined ? NaN : Number(rawRate);
+
+    if (Number.isNaN(minQty) || minQty < 1 || !Number.isInteger(minQty)) {
+      return `Bậc số lượng thứ ${i + 1}: Số lượng bắt đầu ("Từ SL") phải là số nguyên lớn hơn hoặc bằng 1.`;
+    }
+    if (Number.isNaN(markupRate) || markupRate < 0) {
+      return `Bậc số lượng thứ ${i + 1}: Tỷ lệ markup phải là số lớn hơn hoặc bằng 0.`;
+    }
+    if (maxQty !== null) {
+      if (Number.isNaN(maxQty) || maxQty < 1 || !Number.isInteger(maxQty)) {
+        return `Bậc số lượng thứ ${i + 1}: Số lượng kết thúc ("Đến SL") phải là số nguyên lớn hơn hoặc bằng 1.`;
+      }
+      if (maxQty < minQty) {
+        return `Bậc số lượng thứ ${i + 1}: Số lượng kết thúc ("Đến SL": ${maxQty}) không được nhỏ hơn số lượng bắt đầu ("Từ SL": ${minQty}).`;
+      }
+    }
+
+    normalized.push({
+      min: minQty,
+      max: maxQty,
+      originalIndex: i
+    });
+  }
+
+  // Sắp xếp các bậc theo số lượng bắt đầu (min)
+  normalized.sort((a, b) => a.min - b.min);
+
+  for (let i = 0; i < normalized.length - 1; i++) {
+    const current = normalized[i];
+    const next = normalized[i + 1];
+
+    if (current.max === null) {
+      return `Bậc số lượng từ ${current.min} đến vô cùng phải là bậc cuối cùng. Không thể có thêm bậc khác sau nó.`;
+    }
+    if (next.min <= current.max) {
+      return `Các bậc số lượng bị chồng chéo nhau: Bậc từ ${current.min} đến ${current.max} chồng chéo với bậc từ ${next.min} đến ${next.max !== null ? next.max : "vô cùng"}.`;
+    }
+  }
+
+  return null;
+};
+
 // Parse đầu vào số không âm và trả kèm trạng thái hợp lệ để validate.
 const parseNonNegativeNumberInput = (value, fallbackValue = 0) => {
   if (value === null || value === undefined || value === "") {
@@ -456,20 +516,14 @@ const retireMissingProductVariants = async (transaction, productId, retainedVari
     WHERE pv.product_id = @ProductId
       ${deleteRetainedCondition}
       AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.variant_id = pv.id)
-      AND NOT EXISTS (SELECT 1 FROM cart_items cart WHERE cart.variant_id = pv.id)
-      AND NOT EXISTS (SELECT 1 FROM inventory_ledgers ledger WHERE ledger.variant_id = pv.id)
-      AND NOT EXISTS (SELECT 1 FROM inventory_voucher_details detail WHERE detail.variant_id = pv.id)
-      AND NOT EXISTS (SELECT 1 FROM inventory_reservations reserve WHERE reserve.variant_id = pv.id);
+      AND NOT EXISTS (SELECT 1 FROM cart_items cart WHERE cart.variant_id = pv.id);
 
     DELETE pv
     FROM product_variants pv
     WHERE pv.product_id = @ProductId
       ${deleteRetainedCondition}
       AND NOT EXISTS (SELECT 1 FROM order_items oi WHERE oi.variant_id = pv.id)
-      AND NOT EXISTS (SELECT 1 FROM cart_items cart WHERE cart.variant_id = pv.id)
-      AND NOT EXISTS (SELECT 1 FROM inventory_ledgers ledger WHERE ledger.variant_id = pv.id)
-      AND NOT EXISTS (SELECT 1 FROM inventory_voucher_details detail WHERE detail.variant_id = pv.id)
-      AND NOT EXISTS (SELECT 1 FROM inventory_reservations reserve WHERE reserve.variant_id = pv.id);
+      AND NOT EXISTS (SELECT 1 FROM cart_items cart WHERE cart.variant_id = pv.id);
   `);
 };
 
@@ -485,6 +539,7 @@ const resolveCompareMaxItems = () => {
 };
 
 // Lưu ảnh sản phẩm dạng data URL ra thư mục uploads hoặc giữ nguyên URL có sẵn.
+// Chặn hoàn toàn việc lưu ảnh local từ data URL.
 const saveProductImage = (req, imageValue) => {
   const normalizedValue = String(imageValue || "").trim();
 
@@ -492,29 +547,11 @@ const saveProductImage = (req, imageValue) => {
     return null;
   }
 
-  if (!normalizedValue.startsWith("data:image/")) {
-    return normalizedValue;
+  if (normalizedValue.startsWith("data:image/")) {
+    throw new Error("Tải ảnh từ máy tính (local) không được phép. Vui lòng cung cấp URL ảnh công khai.");
   }
 
-  const matches = normalizedValue.match(/^data:image\/([a-zA-Z0-9+]+);base64,(.+)$/);
-
-  if (!matches) {
-    throw new Error("Dinh dang anh tai len khong hop le.");
-  }
-
-  const extension = matches[1] === "jpeg" ? "jpg" : matches[1].toLowerCase();
-  const base64Payload = matches[2];
-  const fileBuffer = Buffer.from(base64Payload, "base64");
-  const uploadsDir = path.resolve(__dirname, "../../../uploads/products");
-
-  fs.mkdirSync(uploadsDir, { recursive: true });
-
-  const fileName = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}.${extension}`;
-  const filePath = path.join(uploadsDir, fileName);
-
-  fs.writeFileSync(filePath, fileBuffer);
-
-  return `${req.protocol}://${req.get("host")}/uploads/products/${fileName}`;
+  return normalizedValue;
 };
 
 // Ánh xạ trạng thái sản phẩm admin sang nhãn dễ đọc.
@@ -611,5 +648,6 @@ module.exports = {
   retireMissingProductVariants,
   saveProductImage,
   upsertProductVariants,
+  validatePriceTiers,
   validateVariantSkusAvailable,
 };
