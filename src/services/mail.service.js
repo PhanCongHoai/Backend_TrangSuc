@@ -500,9 +500,11 @@ const sendOrderRefundedEmail = async ({ to, displayName, orderId, internalCode, 
 };
 
 const buildOrderRefundRejectedHtml = ({ displayName, internalCode, reason }) => {
-  const safeName = escapeHtml(displayName || "bạn");
+  const safeName = escapeHtml(displayName || "Khách hàng");
   const safeCode = escapeHtml(internalCode);
   const safeReason = escapeHtml(reason || "Không đáp ứng đủ điều kiện chính sách hoàn trả.");
+  const frontendUrl = String(process.env.FRONTEND_URL || "http://localhost:3000").trim();
+  const supportUrl = `${frontendUrl}/orders`;
 
   return `
     <!doctype html>
@@ -510,34 +512,66 @@ const buildOrderRefundRejectedHtml = ({ displayName, internalCode, reason }) => 
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Yêu cầu hoàn trả đơn hàng #${safeCode} bị từ chối</title>
+        <title>Cập nhật trạng thái yêu cầu hoàn tiền #${safeCode}</title>
       </head>
-      <body style="margin:0;background:#f4f0e6;font-family:Arial,Helvetica,sans-serif;color:#17140c;">
-        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f0e6;padding:28px 12px;">
+      <body style="margin: 0; padding: 0; background-color: #faf9f6; font-family: 'Segoe UI', Arial, sans-serif; -webkit-font-smoothing: antialiased; color: #333333;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #faf9f6; padding: 40px 10px;">
           <tr>
             <td align="center">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#0f0f0d;border:1px solid #d4af37;border-radius:8px;overflow:hidden;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; background-color: #ffffff; border: 1px solid #e0dcd3; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.05);">
+                <!-- Header -->
                 <tr>
-                  <td style="padding:28px 30px;background:#17140c;border-bottom:1px solid rgba(212,175,55,.35);">
-                    <div style="font-size:24px;font-weight:800;letter-spacing:2px;color:#f2c84b;">JEWELRYBOOK</div>
-                    <div style="margin-top:6px;font-size:13px;color:#f7e7a3;">Thông báo từ chối hoàn trả đơn hàng</div>
+                  <td style="padding: 32px 40px; background-color: #0f0f0d; text-align: center; border-bottom: 3px solid #d4af37;">
+                    <div style="font-size: 26px; font-weight: 800; letter-spacing: 4px; color: #d4af37; margin: 0; font-family: 'Times New Roman', Georgia, serif;">JEWELRYBOOK</div>
+                    <div style="margin-top: 8px; font-size: 12px; color: #a9a18c; text-transform: uppercase; letter-spacing: 2px;">Thông Báo Đơn Hàng & Hoàn Trả</div>
                   </td>
                 </tr>
+                
+                <!-- Content Body -->
                 <tr>
-                  <td style="padding:30px;">
-                    <h1 style="margin:0 0 14px;font-size:22px;line-height:1.3;color:#ff5b5b;">Từ chối yêu cầu hoàn tiền</h1>
-                    <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#ded8c7;">Xin chào ${safeName},</p>
-                    <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#ded8c7;">Chúng tôi rất tiếc phải thông báo rằng yêu cầu hoàn trả cho đơn hàng <strong>#${safeCode}</strong> của bạn không được chấp nhận.</p>
+                  <td style="padding: 40px 40px 30px;">
+                    <h2 style="margin: 0 0 16px; font-size: 20px; color: #111111; font-weight: 700; line-height: 1.3;">Chào ${safeName},</h2>
+                    <p style="margin: 0 0 20px; font-size: 15px; line-height: 1.6; color: #555555;">Chúng tôi đã hoàn thành đối soát yêu cầu hoàn tiền cho đơn hàng <strong>#${safeCode}</strong> của bạn. Rất tiếc, yêu cầu hoàn tiền của bạn <strong>không được chấp thuận</strong> với lý do cụ thể dưới đây:</p>
                     
-                    <div style="margin:20px 0;padding:20px;background:#1a1711;border:1px solid #ff5b5b;border-radius:8px;">
-                      <div style="font-size:14px;color:#a9a18c;margin-bottom:8px;text-transform:uppercase;">Chi tiết từ chối</div>
-                      <div style="font-size:15px;color:#ffffff;margin-bottom:6px;"><strong>Mã đơn hàng:</strong> #${safeCode}</div>
-                      <div style="font-size:15px;color:#ffffff;"><strong>Lý do từ chối:</strong> ${safeReason}</div>
+                    <!-- Reason Box -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin: 24px 0; border-collapse: separate;">
+                      <tr>
+                        <td style="padding: 20px; background-color: #fff8f8; border-left: 4px solid #ff4d4d; border-radius: 0 8px 8px 0; border-top: 1px solid #ffe5e5; border-right: 1px solid #ffe5e5; border-bottom: 1px solid #ffe5e5;">
+                          <div style="font-size: 12px; font-weight: bold; text-transform: uppercase; color: #ff4d4d; letter-spacing: 1px; margin-bottom: 8px;">Lý do từ chối từ cửa hàng:</div>
+                          <div style="font-size: 15px; line-height: 1.6; color: #333333; font-style: italic;">"${safeReason}"</div>
+                        </td>
+                      </tr>
+                    </table>
+                    
+                    <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #555555;">Nếu bạn có bất kỳ câu hỏi nào hoặc muốn gửi thêm thông tin đối soát, vui lòng nhấn nút bên dưới để xem lại đơn hàng hoặc kết nối với nhân viên tư vấn thông qua cổng chat trực tuyến.</p>
+                    
+                    <!-- Action Button -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin: 30px 0 10px; text-align: center;">
+                      <tr>
+                        <td>
+                          <a href="${supportUrl}" target="_blank" style="display: inline-block; background-color: #d4af37; background: linear-gradient(135deg, #d4af37, #b89025); color: #000000; text-decoration: none; font-weight: 700; font-size: 14px; border-radius: 6px; padding: 14px 28px; box-shadow: 0 4px 12px rgba(212,175,55,0.25); border: 1px solid #b89025;">Xem Chi Tiết Đơn Hàng</a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <!-- Divider -->
+                <tr>
+                  <td style="padding: 0 40px;">
+                    <hr style="border: 0; border-top: 1px solid #e8e5dd; margin: 0;" />
+                  </td>
+                </tr>
+                
+                <!-- Brand Signature / Footer info -->
+                <tr>
+                  <td style="padding: 30px 40px 40px; background-color: #faf9f6; text-align: center;">
+                    <p style="margin: 0 0 12px; font-size: 14px; color: #666666;">Trân trọng cảm ơn bạn đã đồng hành cùng JewelryBook.</p>
+                    <div style="font-size: 12px; color: #999999; line-height: 1.5; margin-top: 16px;">
+                      © ${new Date().getFullYear()} JewelryBook. All rights reserved.<br />
+                      Địa chỉ văn phòng: 261 Dinh Phong Phu, Tang Nhon Phu B, TP. Thu Duc, TP. HCM<br />
+                      Hotline hỗ trợ: 0344 800 289
                     </div>
-                    
-                    <p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#ded8c7;">Nếu có bất kỳ thắc mắc nào hoặc muốn biết thêm chi tiết về quyết định này, vui lòng liên hệ bộ phận hỗ trợ khách hàng của chúng tôi bằng cách trả lời email này hoặc thông qua kênh chat trực tuyến trên hệ thống.</p>
-                    <p style="margin:24px 0 0;font-size:13px;line-height:1.6;color:#a9a18c;">Cảm ơn bạn đã luôn đồng hành cùng JewelryBook.</p>
-                    <p style="margin:24px 0 0;font-size:13px;line-height:1.6;color:#a9a18c;">Trân trọng,<br/>Đội ngũ JewelryBook</p>
                   </td>
                 </tr>
               </table>

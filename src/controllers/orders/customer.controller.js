@@ -173,7 +173,7 @@ const createCustomerOrder = async (req, res) => {
         .input(
           "PaymentStatus",
           sql.VarChar(50),
-          paymentMethod === "cod" ? "UNPAID" : "PENDING",
+          "UNPAID",
         )
         .input(
           "ShippingCode",
@@ -249,7 +249,7 @@ const createCustomerOrder = async (req, res) => {
         .input(
           "Status",
           sql.VarChar(50),
-          paymentMethod === "cod" ? "UNPAID" : "PENDING",
+          "UNPAID",
         )
         .input(
           "PaymentLog",
@@ -264,7 +264,7 @@ const createCustomerOrder = async (req, res) => {
 
       let paymentResponse = {
         method: paymentMethod,
-        status: paymentMethod === "cod" ? "UNPAID" : "PENDING",
+        status: "UNPAID",
         amount: totalAmount,
         provider: null,
       };
@@ -351,7 +351,7 @@ const createCustomerOrder = async (req, res) => {
         userId,
         reason: "created",
         status: ghnOrder?.order_code ? "PROCESSING" : "PENDING",
-        paymentStatus: paymentMethod === "cod" ? "UNPAID" : "PENDING",
+        paymentStatus: "UNPAID",
       });
 
       return res.status(201).json({
@@ -585,6 +585,7 @@ const getMyOrderPaymentStatus = async (req, res) => {
           o.status,
           o.payment_status,
           o.total_amount,
+          o.created_at,
           payment.method AS payment_method,
           payment.status AS payment_row_status,
           payment.transaction_id,
@@ -611,9 +612,15 @@ const getMyOrderPaymentStatus = async (req, res) => {
 
     const paymentLog = parseJsonSafe(order.payment_log, {}) || {};
     const paymentStatus = String(
-      order.payment_status || order.payment_row_status || "PENDING",
+      order.payment_status || order.payment_row_status || "UNPAID",
     ).trim().toUpperCase();
     const isPaid = paymentStatus === "PAID";
+
+    // Tính toán số giây thanh toán còn lại (tối đa 3 phút = 180s)
+    const createdAt = new Date(order.created_at || new Date());
+    const now = new Date();
+    const diffSeconds = Math.floor((now - createdAt) / 1000);
+    const remainingSeconds = Math.max(0, 180 - diffSeconds);
 
     return res.status(200).json({
       success: true,
@@ -641,6 +648,10 @@ const getMyOrderPaymentStatus = async (req, res) => {
           warning: paymentLog?.sepay?.warning || "",
           sepayTransactionId:
             paymentLog?.sepay?.id || paymentLog?.sepayTransactionId || order.transaction_id || "",
+          qrCodeUrl: paymentLog?.sepay?.qrCodeUrl || "",
+          qrEnabled: !!paymentLog?.sepay?.qrCodeUrl,
+          remainingSeconds,
+          createdAt: createdAt.toISOString(),
         },
       },
     });
@@ -685,10 +696,17 @@ const cancelCustomerOrder = async (req, res) => {
           o.total_amount,
           u.email,
           u.username,
-          ship.status AS shipping_status
+          ship.status AS shipping_status,
+          payment.method AS payment_method
         FROM orders o
         INNER JOIN users u ON u.id = o.user_id
         LEFT JOIN shipping_orders ship ON ship.order_id = o.id
+        OUTER APPLY (
+          SELECT TOP 1 method
+          FROM order_payments
+          WHERE order_id = o.id
+          ORDER BY created_at DESC, id DESC
+        ) payment
         WHERE o.id = @OrderId AND o.user_id = @UserId
       `);
 
@@ -703,6 +721,15 @@ const cancelCustomerOrder = async (req, res) => {
 
     const currentStatus = String(order.status || "").trim().toUpperCase();
     const shippingStatus = String(order.shipping_status || "").trim().toUpperCase();
+    const paymentMethod = String(order.payment_method || "").trim().toLowerCase();
+    const paymentStatus = String(order.payment_status || "").trim().toUpperCase();
+
+    if (paymentMethod === "prepaid" && paymentStatus === "PAID") {
+      return res.status(400).json({
+        success: false,
+        message: "Đơn hàng đã được thanh toán trước, không thể tự hủy. Vui lòng liên hệ bộ phận hỗ trợ khách hàng để được xử lý.",
+      });
+    }
 
     if (["CANCELLED", "COMPLETED"].includes(currentStatus)) {
       return res.status(400).json({

@@ -340,7 +340,7 @@ const confirmAdminReturnRequest = async (req, res) => {
         .input("OrderId", sql.Int, reqRow.order_id)
         .query(`
           UPDATE order_payments
-          SET status = 'CANCELLED'
+          SET status = 'UNPAID'
           WHERE order_id = @OrderId
         `);
 

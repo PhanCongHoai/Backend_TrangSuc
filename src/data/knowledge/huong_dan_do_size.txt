@@ -1,0 +1,26 @@
+HƯỚNG DẪN ĐO KÍCH CỠ (SIZE) TRANG SỨC TẠI NHÀ
+
+Để chọn được sản phẩm trang sức (Nhẫn, Lắc tay, Vòng tay) vừa vặn nhất, quý khách có thể tự thực hiện đo kích thước theo các bước đơn giản sau:
+
+1. HƯỚNG DẪN ĐO SIZE NHẪN BẰNG GIẤY VÀ THƯỚC KẺ:
+- Bước 1: Cắt một dải giấy nhỏ có chiều ngang khoảng 5mm (khoảng nửa phân) và chiều dài tầm 10cm.
+- Bước 2: Quấn dải giấy sát quanh phần gốc ngón tay muốn đeo nhẫn. Hãy lưu ý quấn hơi chặt một chút tại khớp ngón tay (vì khớp ngón tay thường to hơn phần gốc ngón tay, nhẫn cần phải đi qua khớp ngón tay mới đeo vào được).
+- Bước 3: Dùng bút đánh dấu chính xác điểm giao nhau của hai đầu dải giấy.
+- Bước 4: Tháo dải giấy ra và đặt phẳng trên bàn, dùng thước kẻ đo chiều dài phần giấy vừa quấn (đơn vị tính là mm). Con số này chính là chu vi ngón tay của bạn.
+- Bước 5: Lấy chu vi vừa đo được chia cho số Pi (3.14) để tìm đường kính trong của nhẫn.
+- Bước 6: Đối chiếu bảng quy đổi size nhẫn chuẩn của JewelryBook:
+  * Chu vi ngón tay 48mm (Đường kính trong 15.3mm) -> Tương ứng Size nhẫn: 8
+  * Chu vi ngón tay 50mm (Đường kính trong 15.9mm) -> Tương ứng Size nhẫn: 10
+  * Chu vi ngón tay 52mm (Đường kính trong 16.5mm) -> Tương ứng Size nhẫn: 12
+  * Chu vi ngón tay 54mm (Đường kính trong 17.2mm) -> Tương ứng Size nhẫn: 14
+  * Chu vi ngón tay 56mm (Đường kính trong 17.8mm) -> Tương ứng Size nhẫn: 16
+  * Chu vi ngón tay 58mm (Đường kính trong 18.5mm) -> Tương ứng Size nhẫn: 18
+
+2. HƯỚNG DẪN ĐO SIZE LẮC TAY VÀ VÒNG TAY:
+- Chuẩn bị một sợi dây mềm (hoặc thước dây nếu có). Quấn sợi dây quanh cổ tay tại vị trí ngay phía sau xương nhô lên của cổ tay.
+- Dùng bút đánh dấu điểm giáp vòng.
+- Đo độ dài sợi dây bằng thước thẳng để lấy chu vi cổ tay (đơn vị cm).
+- Công thức quy đổi size lắc tay/vòng tay:
+  * Nếu bạn muốn đeo vừa vặn, thoải mái nhẹ: Size lắc tay = Chu vi cổ tay + 1.0cm đến 1.5cm.
+  * Nếu bạn muốn đeo ôm sát cổ tay: Size lắc tay = Chu vi cổ tay + 0.5cm.
+  * Ví dụ: Chu vi cổ tay đo được là 15cm, muốn đeo thoải mái thì chọn lắc tay dài 16cm đến 16.5cm.

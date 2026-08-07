@@ -297,6 +297,113 @@ const ensureProductPriceTiersSchema = async (pool) => {
   `);
 };
 
+// Bảo đảm bảng product_details đã tồn tại và seed dữ liệu mẫu
+const ensureProductDetailsSchema = async (pool) => {
+  await pool.request().query(`
+    IF OBJECT_ID('dbo.product_details', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.product_details (
+        id INT IDENTITY(1,1) PRIMARY KEY,
+        product_id INT NOT NULL UNIQUE,
+        main_material NVARCHAR(100) NULL,
+        material_purity VARCHAR(50) NULL,
+        primary_color NVARCHAR(50) NULL,
+        main_gemstone NVARCHAR(100) NULL,
+        gemstone_size VARCHAR(50) NULL,
+        gemstone_shape NVARCHAR(50) NULL,
+        side_gemstone NVARCHAR(150) NULL,
+        gender NVARCHAR(30) NULL,
+        collection NVARCHAR(150) NULL,
+        origin NVARCHAR(100) NULL,
+        warranty_months INT NULL DEFAULT 12,
+        created_at DATETIME DEFAULT GETDATE(),
+        updated_at DATETIME DEFAULT GETDATE(),
+        CONSTRAINT FK_product_details_products
+          FOREIGN KEY (product_id) REFERENCES dbo.products(id) ON DELETE CASCADE
+      );
+
+      -- Seed attributes for existing products
+      INSERT INTO dbo.product_details (
+        product_id, main_material, material_purity, primary_color,
+        main_gemstone, gemstone_size, gemstone_shape, side_gemstone,
+        gender, collection, origin, warranty_months
+      )
+      SELECT 
+        p.id,
+        -- Chất liệu chính
+        CASE 
+          WHEN p.material_type LIKE N'%Bạch kim%' THEN N'Bạch kim'
+          WHEN p.material_type LIKE N'%Bạc%' OR p.material_type LIKE N'%SILVER%' THEN N'Bạc'
+          WHEN p.material_type LIKE N'%Vàng trắng%' OR p.material_type LIKE N'%WHITE_GOLD%' THEN N'Vàng trắng'
+          WHEN p.material_type LIKE N'%Vàng%' OR p.material_type LIKE N'%GOLD%' THEN N'Vàng'
+          ELSE N'Vàng 18K'
+        END AS main_material,
+        
+        -- Độ tinh khiết
+        CASE 
+          WHEN p.material_type LIKE N'%18K%' OR p.material_type LIKE N'%GOLD_18K%' THEN '18K (75%)'
+          WHEN p.material_type LIKE N'%24K%' OR p.material_type LIKE N'%GOLD_24K%' THEN '24K (99.9%)'
+          WHEN p.material_type LIKE N'%10K%' OR p.material_type LIKE N'%GOLD_10K%' THEN '10K (41.7%)'
+          WHEN p.material_type LIKE N'%Bạch kim%' THEN 'Pt950 (95%)'
+          WHEN p.material_type LIKE N'%925%' THEN '92.5%'
+          ELSE '75%'
+        END AS material_purity,
+        
+        -- Màu sắc chủ đạo
+        CASE 
+          WHEN p.material_type LIKE N'%Vàng trắng%' OR p.material_type LIKE N'%WHITE_GOLD%' 
+               OR p.material_type LIKE N'%Bạc%' OR p.material_type LIKE N'%SILVER%'
+               OR p.material_type LIKE N'%Bạch kim%' THEN N'Trắng'
+          ELSE N'Vàng vàng'
+        END AS primary_color,
+        
+        -- Đá chính
+        CASE 
+          WHEN c.name LIKE N'%Nhẫn cưới%' THEN N'Kim cương tự nhiên'
+          WHEN c.name LIKE N'%Nhẫn%' THEN N'Kim cương'
+          WHEN c.name LIKE N'%Dây chuyền%' OR c.name LIKE N'%Vòng cổ%' THEN N'Kim cương Thượng hải'
+          ELSE N'Đá CZ cao cấp'
+        END AS main_gemstone,
+        
+        -- Kích thước đá chính
+        CASE 
+          WHEN c.name LIKE N'%Nhẫn cưới%' THEN '3.5 mm'
+          WHEN c.name LIKE N'%Nhẫn%' THEN '4.0 mm'
+          WHEN c.name LIKE N'%Dây chuyền%' OR c.name LIKE N'%Vòng cổ%' THEN '4.5 mm'
+          ELSE '2.5 mm'
+        END AS gemstone_size,
+        
+        -- Kiểu cắt đá chính
+        N'Tròn' AS gemstone_shape,
+        
+        -- Đá phụ
+        CASE 
+          WHEN c.name LIKE N'%Nhẫn cưới%' THEN N'Kim cương tấm'
+          ELSE N'Đá CZ tấm'
+        END AS side_gemstone,
+        
+        -- Giới tính
+        CASE 
+          WHEN c.name LIKE N'%nam%' THEN N'Nam'
+          WHEN c.name LIKE N'%nữ%' OR c.name LIKE N'%Nữ%' THEN N'Nữ'
+          WHEN c.name LIKE N'%cưới%' THEN N'Cặp đôi'
+          ELSE N'Unisex'
+        END AS gender,
+        
+        -- Bộ sưu tập
+        CASE 
+          WHEN c.name LIKE N'%cưới%' THEN N'Wedding Collection'
+          ELSE N'Eternal Love'
+        END AS collection,
+        
+        N'Việt Nam' AS origin,
+        12 AS warranty_months
+      FROM dbo.products p
+      LEFT JOIN dbo.product_categories c ON c.id = p.category_id;
+    END;
+  `);
+};
+
 // Thay thế toàn bộ bảng giá số lượng của một sản phẩm trong cùng transaction.
 const replaceProductPriceTiers = async (
   transaction,
@@ -574,60 +681,88 @@ const buildAdminStatusLabel = (status) => {
 };
 
 // Gộp dữ liệu sản phẩm, ảnh, biến thể và bảng giá thành payload admin hoàn chỉnh.
-const buildAdminProducts = (products, images, variants, priceTiers = []) =>
-  products.map((product) => ({
-    id: product.id,
-    category_id: product.category_id,
-    category_name: product.category_name || "Chua phan loai",
-    name: product.name,
-    description: product.description || "",
-    material_type: product.material_type || "",
-    base_weight: Number(product.base_weight || 0),
-    status: product.status || "DRAFT",
-    status_label: buildAdminStatusLabel(product.status),
-    created_at: product.created_at,
-    images: images
-      .filter((item) => item.product_id === product.id)
-      .map((item) => ({
-        id: item.id,
-        url: item.url,
-        is_main: Boolean(item.is_main),
-      })),
-    variants: variants
-      .filter((item) => item.product_id === product.id)
-      .map((item) => ({
-        id: item.id,
-        sku: item.sku,
-        size: item.size || "Free size",
-        weight_modifier: Number(item.weight_modifier || 0),
-        stock: {
-          quantity: Number(item.quantity || 0),
-          warehouse_location: item.warehouse_location || "Chua cap nhat",
-        },
-      })),
-    price_tiers: priceTiers
-      .filter((item) => item.product_id === product.id)
-      .map((item) =>
-        mapPriceTier(item, {
+const buildAdminProducts = (products, images, variants, priceTiers = [], details = []) =>
+  products.map((product) => {
+    const pDetail = details.find((d) => d.product_id === product.id);
+    return {
+      id: product.id,
+      category_id: product.category_id,
+      category_name: product.category_name || "Chua phan loai",
+      name: product.name,
+      description: product.description || "",
+      material_type: product.material_type || "",
+      base_weight: Number(product.base_weight || 0),
+      status: product.status || "DRAFT",
+      status_label: buildAdminStatusLabel(product.status),
+      created_at: product.created_at,
+      attributes: pDetail ? {
+        mainMaterial: pDetail.main_material || "",
+        materialPurity: pDetail.material_purity || "",
+        primaryColor: pDetail.primary_color || "",
+        mainGemstone: pDetail.main_gemstone || "",
+        gemstoneSize: pDetail.gemstone_size || "",
+        gemstoneShape: pDetail.gemstone_shape || "",
+        sideGemstone: pDetail.side_gemstone || "",
+        gender: pDetail.gender || "",
+        collection: pDetail.collection || "",
+        origin: pDetail.origin || "",
+        warrantyMonths: pDetail.warranty_months !== null ? Number(pDetail.warranty_months) : 12,
+      } : {
+        mainMaterial: "",
+        materialPurity: "",
+        primaryColor: "",
+        mainGemstone: "",
+        gemstoneSize: "",
+        gemstoneShape: "",
+        sideGemstone: "",
+        gender: "",
+        collection: "",
+        origin: "",
+        warrantyMonths: 12,
+      },
+      images: images
+        .filter((item) => item.product_id === product.id)
+        .map((item) => ({
+          id: item.id,
+          url: item.url,
+          is_main: Boolean(item.is_main),
+        })),
+      variants: variants
+        .filter((item) => item.product_id === product.id)
+        .map((item) => ({
+          id: item.id,
+          sku: item.sku,
+          size: item.size || "Free size",
+          weight_modifier: Number(item.weight_modifier || 0),
+          stock: {
+            quantity: Number(item.quantity || 0),
+            warehouse_location: item.warehouse_location || "Chua cap nhat",
+          },
+        })),
+      price_tiers: priceTiers
+        .filter((item) => item.product_id === product.id)
+        .map((item) =>
+          mapPriceTier(item, {
+            baseSellPrice: product.base_sell_price,
+            baseWeight: product.base_weight,
+            laborCost: product.labor_cost,
+            stoneCost: product.stone_cost,
+          })
+        ),
+      pricing: {
+        labor_cost: Number(product.labor_cost || 0),
+        stone_cost: Number(product.stone_cost || 0),
+        markup_rate: Number(product.markup_rate || 0),
+        current_sale_price_cache: computeSalePrice({
           baseSellPrice: product.base_sell_price,
           baseWeight: product.base_weight,
           laborCost: product.labor_cost,
           stoneCost: product.stone_cost,
-        })
-      ),
-    pricing: {
-      labor_cost: Number(product.labor_cost || 0),
-      stone_cost: Number(product.stone_cost || 0),
-      markup_rate: Number(product.markup_rate || 0),
-      current_sale_price_cache: computeSalePrice({
-        baseSellPrice: product.base_sell_price,
-        baseWeight: product.base_weight,
-        laborCost: product.labor_cost,
-        stoneCost: product.stone_cost,
-        markupRate: product.markup_rate,
-      }),
-    },
-  }));
+          markupRate: product.markup_rate,
+        }),
+      },
+    };
+  });
 
 module.exports = {
   buildAdminProducts,
@@ -635,6 +770,7 @@ module.exports = {
   buildBadge,
   computeSalePrice,
   ensureProductPriceTiersSchema,
+  ensureProductDetailsSchema,
   findDuplicateVariantSku,
   findInvalidNumericProductFields,
   formatCurrency,

@@ -49,7 +49,7 @@ const buildAdminOrderSummary = (orders = []) => {
     return acc;
   }, {});
   const totalRevenue = orders
-    .filter((order) => normalizeAdminOrderStatus(order.status) !== "CANCELLED")
+    .filter((order) => normalizeAdminOrderStatus(order.status) === "COMPLETED")
     .reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
 
   return [
@@ -58,7 +58,7 @@ const buildAdminOrderSummary = (orders = []) => {
     { label: "Đang xử lý", value: String(countByStatus.PROCESSING || 0) },
     { label: "Đang giao", value: String(countByStatus.SHIPPING || 0) },
     { label: "Hoàn tất", value: String(countByStatus.COMPLETED || 0) },
-    { label: "Doanh thu hợp lệ", value: formatCurrency(totalRevenue) },
+    { label: "Doanh thu thực tế", value: formatCurrency(totalRevenue) },
   ];
 };
 
@@ -141,7 +141,7 @@ const getAdminRevenueReport = async (req, res) => {
               CAST(o.created_at AS DATE) AS bucket_date,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) <> 'CANCELLED' THEN o.total_amount ELSE 0 END) AS revenue,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'COMPLETED' THEN o.total_amount ELSE 0 END) AS completed_revenue,
-              SUM(CASE WHEN UPPER(ISNULL(o.status, '')) <> 'CANCELLED' THEN 1 ELSE 0 END) AS order_count,
+              SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'COMPLETED' THEN 1 ELSE 0 END) AS order_count,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_count
             FROM orders o
             WHERE o.created_at >= @StartDate
@@ -177,7 +177,7 @@ const getAdminRevenueReport = async (req, res) => {
               MONTH(o.created_at) AS month_number,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) <> 'CANCELLED' THEN o.total_amount ELSE 0 END) AS revenue,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'COMPLETED' THEN o.total_amount ELSE 0 END) AS completed_revenue,
-              SUM(CASE WHEN UPPER(ISNULL(o.status, '')) <> 'CANCELLED' THEN 1 ELSE 0 END) AS order_count,
+              SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'COMPLETED' THEN 1 ELSE 0 END) AS order_count,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_count
             FROM orders o
             WHERE YEAR(o.created_at) = @Year
@@ -214,7 +214,7 @@ const getAdminRevenueReport = async (req, res) => {
               YEAR(o.created_at) AS year_number,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) <> 'CANCELLED' THEN o.total_amount ELSE 0 END) AS revenue,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'COMPLETED' THEN o.total_amount ELSE 0 END) AS completed_revenue,
-              SUM(CASE WHEN UPPER(ISNULL(o.status, '')) <> 'CANCELLED' THEN 1 ELSE 0 END) AS order_count,
+              SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'COMPLETED' THEN 1 ELSE 0 END) AS order_count,
               SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'CANCELLED' THEN 1 ELSE 0 END) AS cancelled_count
             FROM orders o
             WHERE YEAR(o.created_at) BETWEEN @StartYear AND @EndYear
@@ -279,9 +279,10 @@ const getAdminDashboardSummary = async (req, res) => {
             FROM orders o
             WHERE o.created_at >= @Today
               AND o.created_at < @Tomorrow
+              AND UPPER(ISNULL(o.status, '')) = 'COMPLETED'
           ) AS today_orders,
           (
-            SELECT ISNULL(SUM(CASE WHEN UPPER(ISNULL(o.status, '')) <> 'CANCELLED' THEN o.total_amount ELSE 0 END), 0)
+            SELECT ISNULL(SUM(CASE WHEN UPPER(ISNULL(o.status, '')) = 'COMPLETED' THEN o.total_amount ELSE 0 END), 0)
             FROM orders o
             WHERE o.created_at >= @Today
               AND o.created_at < @Tomorrow
@@ -314,8 +315,8 @@ const getAdminDashboardSummary = async (req, res) => {
         lowStockThreshold,
       },
       stats: [
-        { label: "Đơn hàng trong ngày", value: String(Number(summary.today_orders || 0)) },
-        { label: "Doanh thu trong ngày", value: formatCurrency(summary.today_revenue || 0) },
+        { label: "Đơn hàng thành công trong ngày", value: String(Number(summary.today_orders || 0)) },
+        { label: "Doanh thu thực tế trong ngày", value: formatCurrency(summary.today_revenue || 0) },
         { label: "Khách hàng mới đăng ký", value: String(Number(summary.today_new_customers || 0)) },
         { label: "Sản phẩm sắp hết", value: String(Number(summary.low_stock_products || 0)) },
       ],
@@ -526,6 +527,14 @@ const updateAdminOrderStatus = async (req, res) => {
     }
 
     await transaction.commit();
+
+    if (nextStatus === "COMPLETED") {
+      const etlService = require("../../services/etl.service");
+      etlService.run().catch((err) => {
+        console.error("[ETL-Trigger] Lỗi đồng bộ khi cập nhật đơn hoàn tất:", err.message);
+      });
+    }
+
     notifyOrderSubscribers({
       orderId: Number(updatedOrder.id),
       userId: Number(updatedOrder.user_id || 0),

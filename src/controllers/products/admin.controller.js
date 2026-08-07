@@ -3,6 +3,7 @@ const {
   buildAdminProducts,
   computeSalePrice,
   ensureProductPriceTiersSchema,
+  ensureProductDetailsSchema,
   findDuplicateVariantSku,
   findInvalidNumericProductFields,
   normalizePriceTierInputs,
@@ -37,8 +38,9 @@ const getAdminProducts = async (req, res) => {
   try {
     const pool = await poolPromise;
     await ensureProductPriceTiersSchema(pool);
+    await ensureProductDetailsSchema(pool);
 
-    const [productsResult, imagesResult, variantsResult, priceTiersResult] = await Promise.all([
+    const [productsResult, imagesResult, variantsResult, priceTiersResult, detailsResult] = await Promise.all([
       pool.request().query(`
         WITH latest_rates AS (
           SELECT
@@ -106,13 +108,30 @@ const getAdminProducts = async (req, res) => {
         FROM product_price_tiers
         ORDER BY product_id ASC, min_quantity ASC, id ASC
       `),
+      pool.request().query(`
+        SELECT
+          product_id,
+          main_material,
+          material_purity,
+          primary_color,
+          main_gemstone,
+          gemstone_size,
+          gemstone_shape,
+          side_gemstone,
+          gender,
+          collection,
+          origin,
+          warranty_months
+        FROM product_details
+      `),
     ]);
 
     const products = buildAdminProducts(
       productsResult.recordset,
       imagesResult.recordset,
       variantsResult.recordset,
-      priceTiersResult.recordset
+      priceTiersResult.recordset,
+      detailsResult.recordset
     );
 
     return res.status(200).json({
@@ -330,6 +349,47 @@ const createAdminProduct = async (req, res) => {
           VALUES (@ProductId, @Url, 1)
         `);
     }
+
+    // Thêm các thuộc tính chi tiết sản phẩm
+    const {
+      main_material,
+      material_purity,
+      primary_color,
+      main_gemstone,
+      gemstone_size,
+      gemstone_shape,
+      side_gemstone,
+      gender,
+      collection,
+      origin,
+      warranty_months,
+    } = req.body;
+
+    await new sql.Request(transaction)
+      .input("ProductId", sql.Int, productId)
+      .input("MainMaterial", sql.NVarChar(100), String(main_material || "").trim() || null)
+      .input("MaterialPurity", sql.VarChar(50), String(material_purity || "").trim() || null)
+      .input("PrimaryColor", sql.NVarChar(50), String(primary_color || "").trim() || null)
+      .input("MainGemstone", sql.NVarChar(100), String(main_gemstone || "").trim() || null)
+      .input("GemstoneSize", sql.VarChar(50), String(gemstone_size || "").trim() || null)
+      .input("GemstoneShape", sql.NVarChar(50), String(gemstone_shape || "").trim() || null)
+      .input("SideGemstone", sql.NVarChar(150), String(side_gemstone || "").trim() || null)
+      .input("Gender", sql.NVarChar(30), String(gender || "").trim() || null)
+      .input("Collection", sql.NVarChar(150), String(collection || "").trim() || null)
+      .input("Origin", sql.NVarChar(100), String(origin || "").trim() || null)
+      .input("WarrantyMonths", sql.Int, warranty_months !== undefined && warranty_months !== "" ? Number(warranty_months) : 12)
+      .query(`
+        INSERT INTO product_details (
+          product_id, main_material, material_purity, primary_color,
+          main_gemstone, gemstone_size, gemstone_shape, side_gemstone,
+          gender, collection, origin, warranty_months
+        )
+        VALUES (
+          @ProductId, @MainMaterial, @MaterialPurity, @PrimaryColor,
+          @MainGemstone, @GemstoneSize, @GemstoneShape, @SideGemstone,
+          @Gender, @Collection, @Origin, @WarrantyMonths
+        )
+      `);
 
     await transaction.commit();
 
@@ -621,6 +681,68 @@ const updateAdminProduct = async (req, res) => {
             VALUES (@ProductId, @Url, 1);
         `);
     }
+
+    // Cập nhật hoặc thêm mới các thuộc tính chi tiết sản phẩm
+    const {
+      main_material,
+      material_purity,
+      primary_color,
+      main_gemstone,
+      gemstone_size,
+      gemstone_shape,
+      side_gemstone,
+      gender,
+      collection,
+      origin,
+      warranty_months,
+    } = req.body;
+
+    await new sql.Request(transaction)
+      .input("ProductId", sql.Int, productId)
+      .input("MainMaterial", sql.NVarChar(100), String(main_material || "").trim() || null)
+      .input("MaterialPurity", sql.VarChar(50), String(material_purity || "").trim() || null)
+      .input("PrimaryColor", sql.NVarChar(50), String(primary_color || "").trim() || null)
+      .input("MainGemstone", sql.NVarChar(100), String(main_gemstone || "").trim() || null)
+      .input("GemstoneSize", sql.VarChar(50), String(gemstone_size || "").trim() || null)
+      .input("GemstoneShape", sql.NVarChar(50), String(gemstone_shape || "").trim() || null)
+      .input("SideGemstone", sql.NVarChar(150), String(side_gemstone || "").trim() || null)
+      .input("Gender", sql.NVarChar(30), String(gender || "").trim() || null)
+      .input("Collection", sql.NVarChar(150), String(collection || "").trim() || null)
+      .input("Origin", sql.NVarChar(100), String(origin || "").trim() || null)
+      .input("WarrantyMonths", sql.Int, warranty_months !== undefined && warranty_months !== "" ? Number(warranty_months) : 12)
+      .query(`
+        IF EXISTS (SELECT 1 FROM product_details WHERE product_id = @ProductId)
+        BEGIN
+          UPDATE product_details
+          SET 
+            main_material = @MainMaterial,
+            material_purity = @MaterialPurity,
+            primary_color = @PrimaryColor,
+            main_gemstone = @MainGemstone,
+            gemstone_size = @GemstoneSize,
+            gemstone_shape = @GemstoneShape,
+            side_gemstone = @SideGemstone,
+            gender = @Gender,
+            collection = @Collection,
+            origin = @Origin,
+            warranty_months = @WarrantyMonths,
+            updated_at = GETDATE()
+          WHERE product_id = @ProductId
+        END
+        ELSE
+        BEGIN
+          INSERT INTO product_details (
+            product_id, main_material, material_purity, primary_color,
+            main_gemstone, gemstone_size, gemstone_shape, side_gemstone,
+            gender, collection, origin, warranty_months
+          )
+          VALUES (
+            @ProductId, @MainMaterial, @MaterialPurity, @PrimaryColor,
+            @MainGemstone, @GemstoneSize, @GemstoneShape, @SideGemstone,
+            @Gender, @Collection, @Origin, @WarrantyMonths
+          )
+        END
+      `);
 
     await transaction.commit();
 

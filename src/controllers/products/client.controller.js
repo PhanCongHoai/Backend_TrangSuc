@@ -3,6 +3,7 @@ const {
   buildBadge,
   computeSalePrice,
   ensureProductPriceTiersSchema,
+  ensureProductDetailsSchema,
   formatCurrency,
   formatDateTime,
   mapPriceTier,
@@ -311,6 +312,7 @@ const getProductDetail = async (req, res) => {
 
     const pool = await poolPromise;
     await ensureProductPriceTiersSchema(pool);
+    await ensureProductDetailsSchema(pool);
 
     const productResult = await pool.request().input("ProductId", sql.Int, productId)
       .query(`
@@ -375,7 +377,7 @@ const getProductDetail = async (req, res) => {
       });
     }
 
-    const [imagesResult, variantsResult, certificatesResult, priceTiersResult, reviewsResult] =
+    const [imagesResult, variantsResult, certificatesResult, priceTiersResult, reviewsResult, attributesResult] =
       await Promise.all([
         pool.request().input("ProductId", sql.Int, productId).query(`
           SELECT
@@ -441,6 +443,22 @@ const getProductDetail = async (req, res) => {
           WHERE r.product_id = @ProductId
             AND ISNULL(r.is_approved, 0) = 1
           ORDER BY r.created_at DESC, r.id DESC
+        `),
+        pool.request().input("ProductId", sql.Int, productId).query(`
+          SELECT
+            main_material,
+            material_purity,
+            primary_color,
+            main_gemstone,
+            gemstone_size,
+            gemstone_shape,
+            side_gemstone,
+            gender,
+            collection,
+            origin,
+            warranty_months
+          FROM product_details
+          WHERE product_id = @ProductId
         `),
       ]);
 
@@ -560,6 +578,19 @@ const getProductDetail = async (req, res) => {
           total: topLevelReviews.length,
           items: (reviewItemsByParent.root || []).map(mapReviewItem),
         },
+        attributes: attributesResult.recordset[0] ? {
+          mainMaterial: attributesResult.recordset[0].main_material || null,
+          materialPurity: attributesResult.recordset[0].material_purity || null,
+          primaryColor: attributesResult.recordset[0].primary_color || null,
+          mainGemstone: attributesResult.recordset[0].main_gemstone || null,
+          gemstoneSize: attributesResult.recordset[0].gemstone_size || null,
+          gemstoneShape: attributesResult.recordset[0].gemstone_shape || null,
+          sideGemstone: attributesResult.recordset[0].side_gemstone || null,
+          gender: attributesResult.recordset[0].gender || null,
+          collection: attributesResult.recordset[0].collection || null,
+          origin: attributesResult.recordset[0].origin || null,
+          warrantyMonths: attributesResult.recordset[0].warranty_months !== null ? Number(attributesResult.recordset[0].warranty_months) : null,
+        } : null,
         summary: {
           variantCount: variantsResult.recordset.length,
           inStockQuantity: variantsResult.recordset.reduce(

@@ -257,7 +257,7 @@ const buildStaticSepayPayment = ({ amount, paymentReference, sepayConfig, warnin
 
   return {
     method: "prepaid",
-    status: "PENDING",
+    status: "UNPAID",
     amount,
     provider: "sepay",
     mode: "static_qr",
@@ -285,7 +285,7 @@ const buildVirtualAccountPayment = ({
   warning = null,
 }) => ({
   method: "prepaid",
-  status: "PENDING",
+  status: "UNPAID",
   amount,
   provider: "sepay",
   mode: "virtual_account",

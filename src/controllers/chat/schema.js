@@ -146,7 +146,69 @@ const ensureChatSchema = async () => {
           ADD created_at DATETIME NOT NULL CONSTRAINT DF_chat_messages_created_at DEFAULT GETDATE();
         END;
 
+        -- Thiet lap khoa ngoai lien ket voi bang users neu ton tai bang users
+        IF OBJECT_ID('dbo.users', 'U') IS NOT NULL
+        BEGIN
+          -- 1. Don dep du lieu mo coi trong chat_conversations
+          IF COL_LENGTH('dbo.chat_conversations', 'user_id') IS NOT NULL
+          BEGIN
+            UPDATE dbo.chat_conversations
+            SET user_id = NULL
+            WHERE user_id IS NOT NULL
+              AND user_id NOT IN (SELECT id FROM dbo.users);
+          END;
 
+          -- 2. Them khoa ngoai cho chat_conversations neu chua co
+          IF NOT EXISTS (
+            SELECT 1 FROM sys.foreign_keys 
+            WHERE name = 'FK_chat_conversations_users' 
+              AND parent_object_id = OBJECT_ID('dbo.chat_conversations')
+          )
+          BEGIN
+            ALTER TABLE dbo.chat_conversations
+            ADD CONSTRAINT FK_chat_conversations_users
+            FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE SET NULL;
+          END;
+
+          -- 3. Don dep du lieu mo coi trong chat_messages
+          IF COL_LENGTH('dbo.chat_messages', 'sender_user_id') IS NOT NULL
+          BEGIN
+            UPDATE dbo.chat_messages
+            SET sender_user_id = NULL
+            WHERE sender_user_id IS NOT NULL
+              AND sender_user_id NOT IN (SELECT id FROM dbo.users);
+          END;
+
+          -- 4. Them khoa ngoai cho chat_messages neu chua co
+          IF NOT EXISTS (
+            SELECT 1 FROM sys.foreign_keys 
+            WHERE name = 'FK_chat_messages_users' 
+              AND parent_object_id = OBJECT_ID('dbo.chat_messages')
+          )
+          BEGIN
+            ALTER TABLE dbo.chat_messages
+            ADD CONSTRAINT FK_chat_messages_users
+            FOREIGN KEY (sender_user_id) REFERENCES dbo.users(id) ON DELETE SET NULL;
+          END;
+        END;
+
+        -- Them khoa ngoai lien ket giua chat_messages va chat_conversations neu chua co
+        IF OBJECT_ID('dbo.chat_messages', 'U') IS NOT NULL
+          AND OBJECT_ID('dbo.chat_conversations', 'U') IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM sys.foreign_keys 
+            WHERE name = 'FK_chat_messages_conversation' 
+              AND parent_object_id = OBJECT_ID('dbo.chat_messages')
+          )
+        BEGIN
+          -- Xoa cac tin nhan mo coi khong thuoc cuoc hoi thoai nao
+          DELETE FROM dbo.chat_messages
+          WHERE conversation_id NOT IN (SELECT id FROM dbo.chat_conversations);
+
+          ALTER TABLE dbo.chat_messages
+          ADD CONSTRAINT FK_chat_messages_conversation
+          FOREIGN KEY (conversation_id) REFERENCES dbo.chat_conversations(id) ON DELETE CASCADE;
+        END;
       `);
 
       isChatSchemaReady = true;

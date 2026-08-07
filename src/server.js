@@ -14,7 +14,14 @@ const shippingRoutes = require("./routes/shipping.routes");
 const orderRoutes = require("./routes/order.routes");
 const promotionRoutes = require("./routes/promotion.routes");
 const cartRoutes = require("./routes/cart.routes");
+const forecastRoutes = require("./routes/forecast.routes");
+const etlService = require("./services/etl.service");
 const { responseMessageNormalizer } = require("./middlewares/responseMessageNormalizer");
+
+// Đảm bảo khởi tạo CSDL JewelryStoreDWH và Star Schema khi khởi chạy
+etlService.ensureSchema().catch((err) => {
+  console.error("Lỗi khi tự động khởi tạo Kho DWH:", err.message);
+});
 
 const app = express();
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -120,10 +127,25 @@ app.use("/api/shipping", shippingRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/promotions", promotionRoutes);
 app.use("/api/cart", cartRoutes);
+app.use("/api/forecast", forecastRoutes);
 
 // start server
 const PORT = process.env.PORT || 5000;
 // Khởi động server Express trên cổng được cấu hình.
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  
+  // Khởi chạy tiến trình tự động dọn dẹp quét đơn hàng hết hạn thanh toán (3 phút)
+  const orderCleanupService = require("./services/orderCleanup.service");
+  orderCleanupService.startCleanupJob();
+
+  // Khởi chạy tiến trình ETL tự động mỗi 1 tiếng chạy ngầm 1 lần
+  setInterval(async () => {
+    console.log("[ETL-Scheduler] Đang tự động chạy tiến trình ETL định kỳ...");
+    try {
+      await etlService.run();
+    } catch (err) {
+      console.error("[ETL-Scheduler] Lỗi chạy định kỳ:", err.message);
+    }
+  }, 60 * 60 * 1000);
 });
